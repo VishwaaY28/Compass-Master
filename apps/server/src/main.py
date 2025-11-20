@@ -1,12 +1,19 @@
+import sys
+import os
+from pathlib import Path
+
+# Add src directory to Python path
+src_path = Path(__file__).parent
+sys.path.insert(0, str(src_path))
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from api.routes import router
-from config.env import env
+from env import env
+from tortoise.contrib.fastapi import register_tortoise
 
 app = FastAPI(
-    title="Proposal Craft API",
-    description="API for Proposal Craft application",
+    title="Compass Master API",
+    description="API for Compass Master application",
 )
 
 app.add_middleware(
@@ -16,8 +23,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 app.include_router(router, prefix="/api")
+
+# Register Tortoise ORM with FastAPI
+register_tortoise(
+    app,
+    db_url="sqlite://db.sqlite3",
+    modules={"models": ["database.models"]},
+    generate_schemas=True,
+    add_exception_handlers=True,
+)
 
 if __name__ == "__main__":
     import uvicorn
