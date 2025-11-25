@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { FiEye, FiEdit2, FiEdit3, FiPlus, FiChevronRight, FiChevronDown, FiLayers } from 'react-icons/fi'
 import { Toaster, toast } from 'react-hot-toast'
 
 
-import { useEffect } from 'react';
 import { useCapabilityApi } from '../hooks/useCapability';
 import type { Capability, Process, Domain } from '../hooks/useCapability';
+import favicon from '../assets/favicon.png';
 
 
 export default function Home() {
@@ -29,8 +29,11 @@ export default function Home() {
     createProcess,
   } = useCapabilityApi();
 
+  const loadedRef = useRef(false);
 
   useEffect(() => {
+    if (loadedRef.current) return;
+    loadedRef.current = true;
     async function load() {
       try {
         const doms = await listDomains();
@@ -179,9 +182,12 @@ export default function Home() {
 
 
   const parentCap = capabilities.find((c) => c.id === processCapId);
+  const selectedDomainName = domains.find((d) => String(d.id) === selectedDomain)?.name;
+  const currentCap = editingId != null ? capabilities.find((c) => c.id === editingId) : undefined;
+  const capDomainName = currentCap?.domain ?? selectedDomainName;
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
+    <div className="min-h-screen bg-gray-50">
       <Toaster
         position="top-right"
         toastOptions={{
@@ -192,7 +198,21 @@ export default function Home() {
           },
         }}
       />
-      <div className="max-w-4xl mx-auto bg-white p-6 rounded-2xl shadow-sm">
+      <header className="border-b sticky top-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50">
+          <div className="container px-6 py-4">
+              <div className="flex items-center gap-3">
+                <img src={favicon} width={40} height={40} alt="favicon" />
+                <div>
+                    <h1 className="text-xl font-semibold">Capability Master™</h1>
+                    <p className="text-xs text-muted-foreground">
+                      Manage your enterprise capabilities and their associated processes.
+                    </p>
+                </div>
+              </div>
+          </div>
+      </header>
+
+      <div className="mx-auto mt-2 bg-white p-6 px-10">
         <div className="flex items-center gap-3 mb-6">
           <FiLayers className="w-8 h-8" />
           <h1 className="text-2xl font-semibold">Capabilities</h1>
@@ -206,7 +226,7 @@ export default function Home() {
           >
             <option value="">Select Domain</option>
             {domains.map((domain) => (
-              <option key={domain.id} value={domain.name}>
+              <option key={domain.id} value={String(domain.id)}>
                 {domain.name}
               </option>
             ))}
@@ -246,7 +266,7 @@ export default function Home() {
 
                           <div>
                             <div className="text-lg font-semibold">{c.name}</div>
-                            <div className="text-xs text-gray-500">: {c.domain}</div>
+                            <div className="text-xs text-gray-500">{c.domain}</div>
                             <div className="mt-2 text-sm text-gray-600">{c.description}</div>
                           </div>
                         </div>
@@ -347,7 +367,7 @@ export default function Home() {
               <h2 className="text-lg font-bold text-gray-900">
                 {modalMode === 'view' ? 'View capability' : modalMode === 'edit' ? 'Edit capability' : 'Add capability'}
               </h2>
-              {selectedDomain && <span className="text-xs text-gray-400 ml-2">to {selectedDomain}</span>}
+              {capDomainName && <span className="text-xs text-gray-400 ml-2">to {capDomainName}</span>}
             </div>
 
             <div className="p-6">
