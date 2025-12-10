@@ -156,6 +156,12 @@ export default function Home() {
   const [manualProcessName, setManualProcessName] = useState('');
   const [manualProcessDescription, setManualProcessDescription] = useState('');
   const [isSavingManual, setIsSavingManual] = useState(false);
+  // Generated processes preview modal (LLM responses) - user must approve which to save
+  const [generatedPreview, setGeneratedPreview] = useState<any[]>([]);
+  const [isGeneratedModalOpen, setIsGeneratedModalOpen] = useState(false);
+  // Track selected processes by their index: { processIdx: set of selected subprocess indices, or null if no subprocesses selected }
+  const [selectedGeneratedIdxs, setSelectedGeneratedIdxs] = useState<Set<string>>(new Set());
+  const [isSavingGenerated, setIsSavingGenerated] = useState(false);
 
   const processLevelOptions = [
     'enterprise',
@@ -214,96 +220,32 @@ export default function Home() {
       const result = await generateProcesses(parentCapability.name, processCapId, parentCapability.domain || '', processLevel);
 
       if (result.status === 'success') {
-        // If backend returned created DB processes, try to refresh from server to show persisted entries.
-        // There may be a short eventual-consistency delay on the server; retry a few times before falling back to the LLM preview.
         const created = result.processes || [];
         const coreFromLLM = result.data?.core_processes || result.data?.['Core Processes'] || [];
 
-        async function fetchProcessesForCapWithRetry(capId: number, attempts = 5, delayMs = 300) {
-          for (let i = 0; i < attempts; i++) {
-            try {
-              const procs = await listProcesses(capId);
-              if (Array.isArray(procs) && procs.length > 0) return procs;
-            } catch (err) {
-              console.error('listProcesses failed during retry', err);
-            }
-            // wait before retrying
-            // small sleep util
-            await new Promise((res) => setTimeout(res, delayMs));
-            delayMs *= 1.5;
-          }
-          return null;
-        }
+        // Prefer backend-created items if present, otherwise fall back to LLM-parsed core processes.
+        const preferSource = Array.isArray(created) && created.length > 0 ? created : coreFromLLM;
 
-        if (Array.isArray(created) && created.length > 0) {
-          // Try to fetch persisted processes for the capability with retries
-          const fetched = await fetchProcessesForCapWithRetry(processCapId as number, 6, 300);
-          if (fetched && fetched.length > 0) {
-            // merge fetched processes into capabilities state
-            setCapabilities((prev) => prev.map((c) => (c.id === processCapId ? { ...c, processes: fetched } : c)));
-            if (processCapId != null) setExpandedIds((prev) => (prev.includes(processCapId) ? prev : [processCapId, ...prev]));
-            toast.success(`Successfully generated and saved ${fetched.length} processes`);
-          } else {
-            // persisted data not available yet; use created payload if present, otherwise fall back to LLM preview
-            // prefer created if it contains usable entries
-            const prefer = created.length > 0 ? created : coreFromLLM;
-            if (Array.isArray(prefer) && prefer.length > 0) {
-              setCapabilities((prevCaps) =>
-                prevCaps.map((c) =>
-                  c.id === processCapId
-                    ? {
-                        ...c,
-                        processes: prefer.map((proc: any, idx: number) => ({
-                          id: proc.id ?? idx + 10000,
-                          name: proc.name,
-                          description: proc.description,
-                          level: proc.level || processLevel,
-                          subprocesses: Array.isArray(proc.subprocesses)
-                            ? proc.subprocesses.map((sub: any, subIdx: number) => ({
-                                id: sub.id ?? `${idx + 10000}-${subIdx}`,
-                                name: sub.name,
-                                lifecycle_phase: sub.lifecycle_phase,
-                              }))
-                            : [],
-                        })),
-                      }
-                    : c
-                )
-              );
-              if (processCapId != null) setExpandedIds((prev) => (prev.includes(processCapId) ? prev : [processCapId, ...prev]));
-              toast.success(`Successfully generated ${prefer.length} processes (preview)`);
-            } else {
-              toast.success('Generation triggered but no processes returned yet; they should appear shortly');
-            }
-          }
-        } else {
-          // No created processes from backend; show LLM-parsed preview immediately and expand capability
-          const coreProcesses = coreFromLLM;
-          setCapabilities((prevCaps) =>
-            prevCaps.map((c) =>
-              c.id === processCapId
-                    ? {
-                        ...c,
-                        processes: coreProcesses.map((proc: any, idx: number) => ({
-                          id: idx + 10000,
-                          name: proc.name,
-                          description: proc.description,
-                          level: processLevel || 'core',
-                          subprocesses: Array.isArray(proc.subprocesses)
-                            ? proc.subprocesses.map((sub: any, subIdx: number) => ({
-                                id: `${idx + 10000}-${subIdx}`,
-                                name: sub.name,
-                                lifecycle_phase: sub.lifecycle_phase,
-                              }))
-                            : [],
-                        })),
-                      }
-                : c
-            )
-          );
-          if (processCapId != null) setExpandedIds((prev) => (prev.includes(processCapId) ? prev : [processCapId, ...prev]));
-          toast.success(`Successfully generated ${coreProcesses.length} processes (preview)`);
-        }
+        // Normalize preview entries for the modal (do NOT persist yet)
+        const normalized = (Array.isArray(preferSource) ? preferSource : []).map((proc: any, idx: number) => ({
+          tempId: idx,
+          name: proc.name,
+          description: proc.description,
+          level: proc.level || processLevel || 'core',
+          subprocesses: Array.isArray(proc.subprocesses)
+            ? proc.subprocesses.map((sub: any, subIdx: number) => ({
+                id: sub.id ?? `${idx + 10000}-${subIdx}`,
+                name: sub.name,
+                description: sub.description,
+                lifecycle_phase: sub.lifecycle_phase,
+              }))
+            : [],
+        }));
+
+        setGeneratedPreview(normalized);
+        setSelectedGeneratedIdxs(new Set());
+        setIsGeneratedModalOpen(true);
+        toast.success(`AI generated ${normalized.length} processes (preview). Please select which to save.`);
         setIsProcessModalOpen(false);
       } else {
         toast.error('Failed to generate processes');
@@ -366,11 +308,103 @@ export default function Home() {
     }
   }
 
+  // Save selected generated processes (from LLM preview) into the DB for the current processCapId
+  async function saveSelectedGeneratedProcesses() {
+    if (processCapId == null) return;
+    if (!Array.isArray(generatedPreview) || generatedPreview.length === 0) return;
+    if (selectedGeneratedIdxs.size === 0) {
+      toast('No processes selected to save');
+      return;
+    }
+
+    try {
+      setIsSavingGenerated(true);
+      const createdProcs: any[] = [];
+      
+      // Process each entry in generatedPreview
+      for (let procIdx = 0; procIdx < generatedPreview.length; procIdx++) {
+        const procKey = `proc-${procIdx}`;
+        const isProcessSelected = selectedGeneratedIdxs.has(procKey);
+        
+        if (!isProcessSelected) continue; // Skip if top-level not selected
+        
+        const p = generatedPreview[procIdx];
+        if (!p) continue;
+        
+        try {
+          // Create the top-level process
+          const created = await createProcess({
+            name: p.name,
+            level: p.level,
+            description: p.description || '',
+            capability_id: processCapId,
+          });
+          createdProcs.push(created);
+          
+          // Create selected subprocesses for this process
+          if (Array.isArray(p.subprocesses)) {
+            for (let subIdx = 0; subIdx < p.subprocesses.length; subIdx++) {
+              const subKey = `proc-${procIdx}-sub-${subIdx}`;
+              if (selectedGeneratedIdxs.has(subKey)) {
+                const sub = p.subprocesses[subIdx];
+                try {
+                  await createProcess({
+                    name: sub.name,
+                    level: 'subprocess',
+                    description: sub.description || '',
+                    capability_id: processCapId,
+                  });
+                  // Subprocess created; don't add to root createdProcs since subprocesses are nested
+                } catch (err) {
+                  console.error('createProcess failed for subprocess', err);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error('createProcess failed for generated item', err);
+        }
+      }
+
+      // Merge created processes into capabilities state
+      if (createdProcs.length > 0) {
+        setCapabilities((prev) =>
+          prev.map((c) => (c.id === processCapId ? { ...c, processes: [...(c.processes || []), ...createdProcs] } : c))
+        );
+        if (processCapId != null) setExpandedIds((prev) => (prev.includes(processCapId) ? prev : [processCapId, ...prev]));
+        toast.success(`Saved ${createdProcs.length} processes`);
+      } else {
+        toast.error('No processes were saved');
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error('Failed to save selected processes');
+    } finally {
+      setIsSavingGenerated(false);
+      setIsGeneratedModalOpen(false);
+      setGeneratedPreview([]);
+      setSelectedGeneratedIdxs(new Set());
+    }
+  }
+
 
   const [expandedIds, setExpandedIds] = useState<number[]>([]);
+  const [expandedProcessIds, setExpandedProcessIds] = useState<Set<number>>(new Set());
 
   function toggleExpand(capId: number) {
     setExpandedIds((prev) => (prev.includes(capId) ? prev.filter((id) => id !== capId) : [capId, ...prev]));
+  }
+
+  function toggleProcessExpand(processId: number) {
+    setExpandedProcessIds((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(processId)) {
+        newSet.delete(processId);
+      } else {
+        newSet.add(processId);
+      }
+      return newSet;
+    });
   }
 
 
@@ -508,62 +542,126 @@ export default function Home() {
                     </div>
 
                     {isExpanded && (
-                      <div className="p-4 border-t bg-transparent">
-                        <div className="space-y-3">
-                            <h1 className="text-xl font-semibold">Processes</h1>
-                            {c.processes.length === 0 ? (
-                            <div className="text-gray-500">No processes yet.</div>
-                          ) : (
-                            c.processes.map((p) => (
-                              <div key={p.id} className="ml-8 bg-white border border-gray-200 rounded-md p-4 shadow-sm">
-                                <div className="flex items-center justify-between">
-                                  <div>
-                                    <div className="font-medium text-gray-800">{p.name}</div>
-                                    <div className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-teal-50 text-teal-700">{p.level}</div>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                   {/* <button className="w-8 h-8 flex items-center justify-center rounded-md text-gray-600 hover:bg-gray-100" title="View process" aria-label="View process">
-                                      <FiEye size={14} />
-                                    </button>
-                                    <button className="w-8 h-8 flex items-center justify-center rounded-md text-gray-600 hover:bg-gray-100" title="Edit process" aria-label="Edit process">
-                                      <FiEdit2 size={14} />
-                                    </button>
-                                    <button className="w-8 h-8 flex items-center justify-center rounded-md bg-blue-600 text-white hover:bg-blue-700" onClick={() => openProcessModal(c.id)} title="Add subprocess" aria-label="Add subprocess">
-                                      <FiPlus size={14} />
-                                    </button> */}
-                                    <button className="w-8 h-8 flex items-center justify-center rounded-md text-red-600 hover:bg-red-50" title="Delete process" aria-label="Delete process" onClick={() => handleDeleteProcess(p.id, c.id)}>
-                                      <FiTrash2 size={14} />
-                                    </button>
-                                  </div>
-                                </div>
-                                {p.description && <div className="mt-3 text-sm text-gray-600">{p.description}</div>}
-                                {/* Render subprocesses nested below core process */}
-                                {Array.isArray((p as any).subprocesses) && (p as any).subprocesses.length > 0 && (
-                                  <div className="ml-6 mt-3">
-                                    <div className="font-semibold text-gray-700 text-sm mb-1">Subprocesses:</div>
-                                    <ul className="space-y-2">
-                                      {(p as any).subprocesses.map((sub: any) => (
-                                        <li key={sub.id} className="pl-3 border-l-2 border-blue-200">
-                                              <div className="flex items-center justify-between">
-                                                <div>
-                                                  <div className="text-gray-800 font-medium">{sub.name}</div>
-                                                  <div className="text-xs text-gray-500">Phase: {sub.lifecycle_phase}</div>
-                                                </div>
-                                                <div>
-                                                  <button className="text-red-600 p-1 rounded hover:bg-red-50" title="Delete subprocess" onClick={() => handleDeleteProcess(sub.id, c.id, p.id)}>
+                      <div className="p-6 border-t bg-gray-50">
+                        <h3 className="text-lg font-semibold text-gray-900 mb-6 flex items-center gap-2">
+                          <FiLayers className="w-5 h-5 text-indigo-600" />
+                          Processes
+                        </h3>
+                        {c.processes.length === 0 ? (
+                          <div className="text-gray-500 text-center py-8">No processes yet.</div>
+                        ) : (() => {
+                          // Separate core/parent processes from subprocesses based on level
+                          const coreProcesses = c.processes.filter(p => p.level === 'core' || p.level === 'enterprise' || p.level === 'process');
+                          const subprocessesByParent: { [key: number]: Process[] } = {};
+                          
+                          // Group subprocesses by their parent
+                          c.processes.filter(p => p.level === 'subprocess').forEach(sub => {
+                            const parentId = (coreProcesses[0]?.id as number) || 0;
+                            if (!subprocessesByParent[parentId]) {
+                              subprocessesByParent[parentId] = [];
+                            }
+                            subprocessesByParent[parentId].push(sub);
+                          });
+
+                          return (
+                            <div className="space-y-3">
+                              {coreProcesses.map((p) => {
+                                const subprocesses = subprocessesByParent[p.id as number] || [];
+                                const hasSubprocesses = subprocesses.length > 0;
+                                const isSubprocessesExpanded = expandedProcessIds.has(p.id as number);
+                                
+                                return (
+                                  <div key={p.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-shadow">
+                                    {/* Core Process Header */}
+                                    <div className="p-4">
+                                      <div className="flex items-start justify-between gap-4">
+                                        <div className="flex-1">
+                                          <div className="flex items-center gap-3">
+                                            <div className="w-2 h-2 rounded-full bg-indigo-600 flex-shrink-0 mt-1"></div>
+                                            <div className="flex-1">
+                                              <h4 className="font-semibold text-gray-900">{p.name}</h4>
+                                              <div className="flex items-center gap-2 mt-2">
+                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800">
+                                                  {p.level}
+                                                </span>
+                                                {hasSubprocesses && (
+                                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-200 text-gray-700 font-medium">
+                                                    {subprocesses.length} subprocess{subprocesses.length !== 1 ? 'es' : ''}
+                                                  </span>
+                                                )}
+                                              </div>
+                                            </div>
+                                          </div>
+                                          {p.description && <p className="mt-2 text-sm text-gray-600 ml-5">{p.description}</p>}
+                                        </div>
+                                        
+                                        <div className="flex items-center gap-1 flex-shrink-0">
+                                          <button 
+                                            className="w-8 h-8 flex items-center justify-center rounded-md text-red-600 hover:bg-red-50 transition-colors" 
+                                            title="Delete process" 
+                                            onClick={() => handleDeleteProcess(p.id, c.id)}
+                                          >
+                                            <FiTrash2 size={16} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    {/* Subprocesses Dropdown */}
+                                    {hasSubprocesses && (
+                                      <>
+                                        <button
+                                          onClick={() => toggleProcessExpand(p.id as number)}
+                                          className="w-full px-4 py-3 bg-indigo-50 border-t border-gray-200 hover:bg-indigo-100 transition-colors flex items-center justify-between gap-2"
+                                        >
+                                          <div className="flex items-center gap-2">
+                                            {isSubprocessesExpanded ? <FiChevronDown size={16} className="text-indigo-600" /> : <FiChevronRight size={16} className="text-indigo-600" />}
+                                            <span className="text-sm font-semibold text-indigo-900">Subprocesses</span>
+                                          </div>
+                                        </button>
+
+                                        {isSubprocessesExpanded && (
+                                          <ul className="divide-y divide-gray-200 bg-indigo-50">
+                                            {subprocesses.map((sub: any) => (
+                                              <li 
+                                                key={sub.id} 
+                                                className="px-4 py-3 hover:bg-indigo-100 transition-colors"
+                                              >
+                                                <div className="ml-6 flex items-start justify-between gap-4">
+                                                  <div className="flex items-start gap-3 flex-1">
+                                                    <div className="w-1.5 h-1.5 rounded-full bg-teal-500 flex-shrink-0 mt-1.5"></div>
+                                                    
+                                                    <div className="flex-1 min-w-0">
+                                                      <h5 className="font-semibold text-gray-800">{sub.name}</h5>
+                                                      <div className="flex items-center gap-2 mt-1">
+                                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">
+                                                          subprocess
+                                                        </span>
+                                                      </div>
+                                                      {sub.description && <p className="text-xs text-gray-600 mt-2">{sub.description}</p>}
+                                                    </div>
+                                                  </div>
+                                                  
+                                                  <button 
+                                                    className="w-8 h-8 flex items-center justify-center rounded-md text-red-600 hover:bg-red-50 transition-colors flex-shrink-0" 
+                                                    title="Delete subprocess" 
+                                                    onClick={() => handleDeleteProcess(sub.id, c.id, p.id)}
+                                                  >
                                                     <FiTrash2 size={14} />
                                                   </button>
                                                 </div>
-                                              </div>
-                                        </li>
-                                      ))}
-                                    </ul>
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        )}
+                                      </>
+                                    )}
                                   </div>
-                                )}
-                              </div>
-                            ))
-                          )}
-                        </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                   </li>
@@ -759,6 +857,158 @@ export default function Home() {
                   </div>
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Generated LLM preview modal - show checkbox list, select all, and save selected */}
+      {isGeneratedModalOpen && (
+        <div className="fixed inset-0 flex items-center justify-center z-50">
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setIsGeneratedModalOpen(false)} />
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl z-50 overflow-y-auto max-h-[80vh]">
+            <div className="border-b border-gray-100 px-6 py-3 bg-gray-50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <FiEdit3 className="w-5 h-5 text-blue-600" />
+                <h2 className="text-lg font-bold text-gray-900">Review generated processes</h2>
+                <span className="text-sm text-gray-500">Select which generated processes to save</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="px-3 py-1.5 rounded-md text-sm bg-gray-100 hover:bg-gray-200"
+                  onClick={() => {
+                    // toggle select all (both top-level and all subprocesses)
+                    if (!generatedPreview || generatedPreview.length === 0) return;
+                    const allKeys = new Set<string>();
+                    generatedPreview.forEach((proc, idx) => {
+                      allKeys.add(`proc-${idx}`);
+                      if (Array.isArray(proc.subprocesses)) {
+                        proc.subprocesses.forEach((_sub: any, subIdx: number) => {
+                          allKeys.add(`proc-${idx}-sub-${subIdx}`);
+                        });
+                      }
+                    });
+                    
+                    if (selectedGeneratedIdxs.size === allKeys.size) {
+                      setSelectedGeneratedIdxs(new Set());
+                    } else {
+                      setSelectedGeneratedIdxs(allKeys);
+                    }
+                  }}
+                >
+                  {selectedGeneratedIdxs.size === 0 ? 'Select all' : 'Unselect all'}
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {(!generatedPreview || generatedPreview.length === 0) ? (
+                <div className="text-gray-500">No generated processes to review.</div>
+              ) : (
+                <ul className="space-y-4">
+                  {generatedPreview.map((proc: any, idx: number) => {
+                    const procKey = `proc-${idx}`;
+                    const procChecked = selectedGeneratedIdxs.has(procKey);
+                    
+                    return (
+                      <li key={idx} className="border rounded-lg p-4 bg-gray-50">
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={procChecked}
+                            onChange={(e) => {
+                              const newSet = new Set(selectedGeneratedIdxs);
+                              if (e.target.checked) {
+                                newSet.add(procKey);
+                                // Auto-select all subprocesses when parent is checked
+                                if (Array.isArray(proc.subprocesses)) {
+                                  proc.subprocesses.forEach((_sub: any, subIdx: number) => {
+                                    newSet.add(`proc-${idx}-sub-${subIdx}`);
+                                  });
+                                }
+                              } else {
+                                newSet.delete(procKey);
+                                // Auto-uncheck all subprocesses when parent is unchecked
+                                if (Array.isArray(proc.subprocesses)) {
+                                  proc.subprocesses.forEach((_sub: any, subIdx: number) => {
+                                    newSet.delete(`proc-${idx}-sub-${subIdx}`);
+                                  });
+                                }
+                              }
+                              setSelectedGeneratedIdxs(newSet);
+                            }}
+                            className="mt-1"
+                          />
+                          <div className="flex-1">
+                            <div className="flex items-center justify-between">
+                              <div className="font-medium text-gray-900">{proc.name}</div>
+                              <div className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-teal-50 text-teal-700">{proc.level}</div>
+                            </div>
+                            {proc.description && <div className="mt-1 text-sm text-gray-600">{proc.description}</div>}
+                            
+                            {/* Subprocesses with individual checkboxes */}
+                            {Array.isArray(proc.subprocesses) && proc.subprocesses.length > 0 && (
+                              <div className="mt-3 ml-6 space-y-2 border-l-2 border-gray-300 pl-4">
+                                <div className="text-xs font-semibold text-gray-700">Subprocesses:</div>
+                                {proc.subprocesses.map((sub: any, subIdx: number) => {
+                                  const subKey = `proc-${idx}-sub-${subIdx}`;
+                                  const subChecked = selectedGeneratedIdxs.has(subKey);
+                                  return (
+                                    <div key={subIdx} className="flex items-start gap-2">
+                                      <input
+                                        type="checkbox"
+                                        checked={subChecked}
+                                        onChange={(e) => {
+                                          const newSet = new Set(selectedGeneratedIdxs);
+                                          if (e.target.checked) {
+                                            newSet.add(subKey);
+                                            // Auto-check parent if any subprocess is checked
+                                            newSet.add(procKey);
+                                          } else {
+                                            newSet.delete(subKey);
+                                          }
+                                          setSelectedGeneratedIdxs(newSet);
+                                        }}
+                                        className="mt-1"
+                                      />
+                                      <div className="text-sm text-gray-700 flex-1">
+                                        <div><span className="font-medium">{sub.name}</span></div>
+                                        {sub.lifecycle_phase && <div className="text-xs text-gray-500">Phase: {sub.lifecycle_phase}</div>}
+                                        {sub.description && <div className="text-xs text-gray-600 mt-0.5">{sub.description}</div>}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+
+              <div className="flex justify-end gap-3 mt-6 pt-4 border-t">
+                <button
+                  className="px-3 py-1.5 rounded-md text-gray-600 hover:bg-gray-100"
+                  onClick={() => {
+                    setIsGeneratedModalOpen(false);
+                    setGeneratedPreview([]);
+                    setSelectedGeneratedIdxs(new Set());
+                  }}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  className="px-4 py-1.5 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={saveSelectedGeneratedProcesses}
+                  disabled={isSavingGenerated || selectedGeneratedIdxs.size === 0}
+                >
+                  {isSavingGenerated ? 'Saving...' : `Save selected (${selectedGeneratedIdxs.size})`}
+                </button>
+              </div>
             </div>
           </div>
         </div>
