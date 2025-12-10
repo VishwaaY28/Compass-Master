@@ -10,10 +10,17 @@ from tortoise.contrib.pydantic import pydantic_model_creator
 from database.repositories import capability_repository, process_repository, domain_repository
 from database.models import Capability as CapabilityModel, Process as ProcessModel, Domain as DomainModel
 from utils.llm import azure_openai_client
+from utils.llm2 import gemini_client
 
 router = APIRouter()
-import logging
 logger = logging.getLogger(__name__)
+
+# Global LLM provider selector (default: azure)
+current_llm_provider = "azure"
+
+class LLMProviderRequest(BaseModel):
+    provider: str  # "azure" or "gemini"
+
 class ResearchRequest(BaseModel):
     query: str
 
@@ -29,9 +36,13 @@ async def research_capabilities(payload: ResearchRequest):
 
     logger.info(f"[Research] User query: {query}")
     logger.info(f"[Research] Capability names: {capability_names}")
+    logger.info(f"[Research] Using LLM provider: {current_llm_provider}")
+
+    # Select LLM client based on current provider
+    llm_client = gemini_client if current_llm_provider == "gemini" else azure_openai_client
 
     # Use LLM to analyze query and match capabilities
-    llm_result = await azure_openai_client.generate_content(
+    llm_result = await llm_client.generate_content(
         prompt=f"Given the following capabilities: {capability_names}. Which are most relevant to the user query: '{query}'? Return a JSON object with a 'capabilities' key containing a list of relevant capability names."
     )
     logger.info(f"[Research] LLM raw result: {llm_result}")
@@ -87,6 +98,24 @@ class ProcessCreateRequest(BaseModel):
 @router.get("/health")
 async def health_check():
     return JSONResponse(content={"status": "ok"}, status_code=200)
+
+
+# LLM Provider Management
+@router.get("/settings/llm-provider")
+async def get_llm_provider():
+    """Get current LLM provider"""
+    return JSONResponse({"provider": current_llm_provider})
+
+
+@router.post("/settings/llm-provider")
+async def set_llm_provider(payload: LLMProviderRequest):
+    """Set the LLM provider (azure or gemini)"""
+    global current_llm_provider
+    if payload.provider not in ["azure", "gemini"]:
+        raise HTTPException(status_code=400, detail="Invalid provider. Must be 'azure' or 'gemini'")
+    current_llm_provider = payload.provider
+    logger.info(f"LLM provider changed to: {current_llm_provider}")
+    return JSONResponse({"provider": current_llm_provider, "message": f"Switched to {payload.provider} LLM"})
 
 
 # CRUD for Domains
@@ -242,11 +271,16 @@ async def generate_processes(payload: GenerateProcessRequest):
     """Generate processes using LLM and save them to the database"""
     try:
         logger.info(f"/processes/generate called with payload: capability_name={payload.capability_name}, capability_id={payload.capability_id}, domain={payload.domain}, process_type={payload.process_type}")
+        logger.info(f"Using LLM provider: {current_llm_provider}")
+        
+        # Select LLM client based on current provider
+        llm_client = gemini_client if current_llm_provider == "gemini" else azure_openai_client
+        
         # Call the LLM to generate processes
-        logger.info("Calling azure_openai_client.generate_processes...")
+        logger.info(f"Calling {current_llm_provider} LLM client.generate_processes...")
         print(f"[DEBUG] /processes/generate payload: capability_name={payload.capability_name}, capability_id={payload.capability_id}, domain={payload.domain}, process_type={payload.process_type}")
         try:
-            llm_result = await azure_openai_client.generate_processes(payload.capability_name, payload.domain, payload.process_type)
+            llm_result = await llm_client.generate_processes(payload.capability_name, payload.domain, payload.process_type)
             logger.info(f"LLM returned: {llm_result}")
             print(f"[DEBUG] LLM returned: {llm_result}")
         except Exception as e:
@@ -301,44 +335,21 @@ async def generate_processes(payload: GenerateProcessRequest):
                          llm_result.get('raw', '')[:1000])
             raise HTTPException(status_code=400, detail="No processes were generated")
         
-        # Verify capability exists
+        # Verify capability exists (just for validation; we don't persist yet)
         capability = await capability_repository.fetch_by_id(payload.capability_id)
         if not capability:
             raise HTTPException(status_code=404, detail="Capability not found")
         
-        # Create processes in the database
-        created_processes = []
-        for core_proc in core_processes:
-            # Create the top-level process using the requested process_type
-            top_level = payload.process_type or "core"
-            core_proc_obj = await process_repository.create_process(
-                name=core_proc.get("name", ""),
-                level=top_level,
-                description=core_proc.get("description", ""),
-                capability_id=payload.capability_id,
-            )
-
-            created_processes.append({
-                "id": core_proc_obj.id,
-                "name": core_proc_obj.name,
-                "level": core_proc_obj.level,
-                "description": core_proc_obj.description,
-            })
-
-            # Create subprocesses; subprocesses remain at 'subprocess' level
-            subprocesses = core_proc.get("subprocesses", [])
-            for subprocess in subprocesses:
-                subprocess_obj = await process_repository.create_process(
-                    name=subprocess.get("name", ""),
-                    level="subprocess",
-                    description=subprocess.get("description", ""),
-                    capability_id=payload.capability_id,
-                )
+        # Return the LLM-generated data WITHOUT persisting (user must approve first)
+        # Frontend will show this data in a preview modal with checkboxes, then call a separate endpoint to create selected items
         
         return {
             "status": "success",
-            "message": f"Successfully generated and saved {len(core_processes)} {payload.process_type or 'core'} processes",
-            "processes": created_processes,
+            "message": f"Generated {len(core_processes)} {payload.process_type or 'core'} processes (preview only)",
+            "processes": [],
+            "data": {
+                "core_processes": core_processes,
+            },
             "process_type": payload.process_type or 'core',
         }
     
