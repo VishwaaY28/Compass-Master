@@ -8,7 +8,7 @@ from typing import List, Optional
 from tortoise.contrib.pydantic import pydantic_model_creator
 
 from database.repositories import capability_repository, process_repository, domain_repository
-from database.models import Capability as CapabilityModel, Process as ProcessModel, Domain as DomainModel
+from database.models import Capability as CapabilityModel, Process as ProcessModel, Domain as DomainModel, SubProcess as SubProcessModel
 from utils.llm import azure_openai_client
 from utils.llm2 import gemini_client
 
@@ -88,11 +88,16 @@ class CapabilityCreateRequest(BaseModel):
     domain_id: Optional[int] = None
 
 
+class SubProcessCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+
 class ProcessCreateRequest(BaseModel):
     name: str
     level: str
     description: str
     capability_id: Optional[int] = None
+    subprocesses: Optional[List[SubProcessCreateRequest]] = None
 
 
 @router.get("/health")
@@ -176,11 +181,28 @@ async def list_capabilities():
         for p in procs:
 
             level = getattr(p.level, 'value', p.level)
+            
+            # Fetch subprocesses for this process
+            try:
+                subprocs = await p.subprocesses.all()
+            except Exception:
+                subprocs = []
+            
+            subprocess_list = [
+                {
+                    "id": sp.id,
+                    "name": sp.name,
+                    "description": sp.description,
+                }
+                for sp in subprocs
+            ]
+            
             proc_list.append({
                 "id": p.id,
                 "name": p.name,
                 "level": level,
                 "description": p.description,
+                "subprocesses": subprocess_list,
             })
 
         result.append({
@@ -220,7 +242,19 @@ async def delete_capability(capability_id: int):
 
 @router.post("/processes", response_model=Process_Pydantic)
 async def create_process(payload: ProcessCreateRequest):
-    obj = await process_repository.create_process(payload.name, payload.level, payload.description, payload.capability_id)
+    subprocesses_data = []
+    if payload.subprocesses:
+        subprocesses_data = [
+            {"name": sp.name, "description": sp.description or ""}
+            for sp in payload.subprocesses
+        ]
+    obj = await process_repository.create_process(
+        payload.name,
+        payload.level,
+        payload.description,
+        payload.capability_id,
+        subprocesses=subprocesses_data
+    )
     return await Process_Pydantic.from_tortoise_orm(obj)
 
 

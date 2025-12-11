@@ -1,10 +1,10 @@
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from tortoise.transactions import in_transaction
 from tortoise.exceptions import DoesNotExist
-from database.models import Process, Capability
+from database.models import Process, Capability, SubProcess
 
 
-async def create_process(name: str, level: str, description: str, capability_id: Optional[int] = None) -> Process:
+async def create_process(name: str, level: str, description: str, capability_id: Optional[int] = None, subprocesses: Optional[List[Dict[str, Any]]] = None) -> Process:
     async with in_transaction():
         capability_obj = None
         if capability_id is not None:
@@ -13,6 +13,16 @@ async def create_process(name: str, level: str, description: str, capability_id:
             except DoesNotExist:
                 capability_obj = None
         proc = await Process.create(name=name, level=level, description=description, capability=capability_obj)
+        
+        # Create associated subprocesses if provided
+        if subprocesses:
+            for sub_data in subprocesses:
+                await SubProcess.create(
+                    name=sub_data.get("name", ""),
+                    description=sub_data.get("description", ""),
+                    process=proc
+                )
+        
         return proc
 
 
