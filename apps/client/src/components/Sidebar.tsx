@@ -3,34 +3,56 @@ import { FiChevronLeft, FiChevronRight, FiLogOut, FiHome, FiLayers, FiSettings, 
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
+interface LLMSettings {
+  provider: string;
+  vaultName: string;
+  temperature: number;
+  maxTokens: number;
+  topP: number;
+}
+
 const Sidebar: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [llmProvider, setLlmProvider] = useState<string>('azure');
+  const [llmSettings, setLlmSettings] = useState<LLMSettings>({
+    provider: 'azure',
+    vaultName: 'https://kvcapabilitycompass.vault.azure.net/',
+    temperature: 0.2,
+    maxTokens: 1500,
+    topP: 0.9,
+  });
   const [isLoadingLLM, setIsLoadingLLM] = useState(false);
+  const [isEditingSettings, setIsEditingSettings] = useState(false);
 
   const navItems = [
     { label: 'Capability Master', path: '/dashboard', icon: FiHome },
     { label: 'Capability Compass', path: '/dashboard/research-agent', icon: FiLayers },
   ];
 
-  // Load current LLM provider on mount
+  // Load current LLM settings on mount
   useEffect(() => {
-    const fetchLLMProvider = async () => {
+    const fetchLLMSettings = async () => {
       try {
         const response = await fetch('/api/settings/llm-provider');
         const data = await response.json();
-        setLlmProvider(data.provider);
+        setLlmSettings(prev => ({
+          ...prev,
+          provider: data.provider || 'azure',
+          vaultName: data.vaultName || 'https://kvcapabilitycompass.vault.azure.net/',
+          temperature: data.temperature ?? 0.2,
+          maxTokens: data.maxTokens ?? 1500,
+          topP: data.topP ?? 0.9,
+        }));
       } catch (error) {
-        console.error('Failed to fetch LLM provider:', error);
+        console.error('Failed to fetch LLM settings:', error);
       }
     };
-    fetchLLMProvider();
+    fetchLLMSettings();
   }, []);
 
-  const handleLLMChange = async (provider: string) => {
+  const handleLLMProviderChange = async (provider: string) => {
     setIsLoadingLLM(true);
     try {
       const response = await fetch('/api/settings/llm-provider', {
@@ -40,11 +62,31 @@ const Sidebar: React.FC = () => {
       });
       if (!response.ok) throw new Error('Failed to change LLM provider');
       await response.json();
-      setLlmProvider(provider);
+      setLlmSettings(prev => ({ ...prev, provider }));
       toast.success(`Switched to ${provider.toUpperCase()} LLM`);
     } catch (error) {
       console.error('Error changing LLM provider:', error);
       toast.error('Failed to change LLM provider');
+    } finally {
+      setIsLoadingLLM(false);
+    }
+  };
+
+  const handleLLMSettingsSave = async () => {
+    setIsLoadingLLM(true);
+    try {
+      const response = await fetch('/api/settings/llm-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(llmSettings),
+      });
+      if (!response.ok) throw new Error('Failed to save LLM settings');
+      await response.json();
+      setIsEditingSettings(false);
+      toast.success('LLM settings updated successfully');
+    } catch (error) {
+      console.error('Error saving LLM settings:', error);
+      toast.error('Failed to save LLM settings');
     } finally {
       setIsLoadingLLM(false);
     }
@@ -104,43 +146,155 @@ const Sidebar: React.FC = () => {
         </button>
 
         {showSettings && !collapsed && (
-          <div className="mt-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+          <div className="mt-3 p-3 bg-gray-50 rounded-lg border border-gray-200 max-h-96 overflow-y-auto">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-gray-900">LLM Provider</h3>
+              <h3 className="text-sm font-semibold text-gray-900">LLM Settings</h3>
               <button
-                onClick={() => setShowSettings(false)}
+                onClick={() => {
+                  setShowSettings(false);
+                  setIsEditingSettings(false);
+                }}
                 className="p-0.5 hover:bg-gray-200 rounded"
               >
                 <FiX size={16} />
               </button>
             </div>
-            <div className="space-y-2">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="llm-provider"
-                  value="azure"
-                  checked={llmProvider === 'azure'}
-                  onChange={() => handleLLMChange('azure')}
+
+            {!isEditingSettings ? (
+              <>
+                <div className="space-y-2 mb-3">
+                  <p className="text-xs font-medium text-gray-600">Provider</p>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="llm-provider"
+                        value="secure"
+                        checked={llmSettings.provider === 'secure'}
+                        onChange={() => handleLLMProviderChange('secure')}
+                        disabled={isLoadingLLM}
+                        className="cursor-pointer"
+                      />
+                      <span className="text-sm text-gray-700">Secure Azure OpenAI</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="llm-provider"
+                        value="azure"
+                        checked={llmSettings.provider === 'azure'}
+                        onChange={() => handleLLMProviderChange('azure')}
+                        disabled={isLoadingLLM}
+                        className="cursor-pointer"
+                      />
+                      <span className="text-sm text-gray-700">Azure OpenAI</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="llm-provider"
+                        value="gemini"
+                        checked={llmSettings.provider === 'gemini'}
+                        onChange={() => handleLLMProviderChange('gemini')}
+                        disabled={isLoadingLLM}
+                        className="cursor-pointer"
+                      />
+                      <span className="text-sm text-gray-700">Google Gemini</span>
+                    </label>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setIsEditingSettings(true)}
                   disabled={isLoadingLLM}
-                  className="cursor-pointer"
-                />
-                <span className="text-sm text-gray-700">Azure OpenAI</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="llm-provider"
-                  value="gemini"
-                  checked={llmProvider === 'gemini'}
-                  onChange={() => handleLLMChange('gemini')}
-                  disabled={isLoadingLLM}
-                  className="cursor-pointer"
-                />
-                <span className="text-sm text-gray-700">Google Gemini</span>
-              </label>
-            </div>
-            {isLoadingLLM && <p className="text-xs text-gray-500 mt-2">Updating...</p>}
+                  className="w-full text-xs px-3 py-2 bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200 disabled:opacity-50 font-medium"
+                >
+                  Advanced Settings
+                </button>
+                {isLoadingLLM && <p className="text-xs text-gray-500 mt-2">Updating...</p>}
+              </>
+            ) : (
+              <>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-gray-600">Vault URL</label>
+                    <input
+                      type="text"
+                      value={llmSettings.vaultName}
+                      onChange={(e) => setLlmSettings(prev => ({ ...prev, vaultName: e.target.value }))}
+                      className="w-full text-xs px-2 py-1 border border-gray-300 rounded mt-1"
+                      placeholder="https://kvcapabilitycompass.vault.azure.net/"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-gray-600">
+                      Temperature: {llmSettings.temperature.toFixed(2)}
+                    </label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      value={llmSettings.temperature}
+                      onChange={(e) => setLlmSettings(prev => ({ ...prev, temperature: parseFloat(e.target.value) }))}
+                      className="w-full text-xs mt-1"
+                    />
+                    <p className="text-xs text-gray-500">Creativity level (0-1)</p>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-gray-600">
+                      Max Tokens: {llmSettings.maxTokens}
+                    </label>
+                    <input
+                      type="range"
+                      min="256"
+                      max="4096"
+                      step="256"
+                      value={llmSettings.maxTokens}
+                      onChange={(e) => setLlmSettings(prev => ({ ...prev, maxTokens: parseInt(e.target.value) }))}
+                      className="w-full text-xs mt-1"
+                    />
+                    <p className="text-xs text-gray-500">Response length limit</p>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-gray-600">
+                      Top P: {llmSettings.topP.toFixed(2)}
+                    </label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      value={llmSettings.topP}
+                      onChange={(e) => setLlmSettings(prev => ({ ...prev, topP: parseFloat(e.target.value) }))}
+                      className="w-full text-xs mt-1"
+                    />
+                    <p className="text-xs text-gray-500">Diversity level (0-1)</p>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 mt-3">
+                  <button
+                    onClick={() => setIsEditingSettings(false)}
+                    disabled={isLoadingLLM}
+                    className="flex-1 text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleLLMSettingsSave}
+                    disabled={isLoadingLLM}
+                    className="flex-1 text-xs px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                </div>
+                {isLoadingLLM && <p className="text-xs text-gray-500 mt-2">Saving...</p>}
+              </>
+            )}
           </div>
         )}
 
