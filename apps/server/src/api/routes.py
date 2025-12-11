@@ -11,15 +11,27 @@ from database.repositories import capability_repository, process_repository, dom
 from database.models import Capability as CapabilityModel, Process as ProcessModel, Domain as DomainModel, SubProcess as SubProcessModel
 from utils.llm import azure_openai_client
 from utils.llm2 import gemini_client
+from utils.secure_llm import azure_openai_client as secure_azure_openai_client
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Global LLM provider selector (default: azure)
-current_llm_provider = "azure"
+# Global LLM configuration
+current_llm_provider = "secure"
+llm_vault_name = "https://kvcapabilitycompass.vault.azure.net/"
+llm_temperature = 0.2
+llm_max_tokens = 1500
+llm_top_p = 0.9
 
 class LLMProviderRequest(BaseModel):
-    provider: str  # "azure" or "gemini"
+    provider: str  # "azure", "gemini", or "secure"
+
+class LLMConfigRequest(BaseModel):
+    provider: str
+    vaultName: str
+    temperature: float
+    maxTokens: int
+    topP: float
 
 class ResearchRequest(BaseModel):
     query: str
@@ -39,7 +51,12 @@ async def research_capabilities(payload: ResearchRequest):
     logger.info(f"[Research] Using LLM provider: {current_llm_provider}")
 
     # Select LLM client based on current provider
-    llm_client = gemini_client if current_llm_provider == "gemini" else azure_openai_client
+    if current_llm_provider == "gemini":
+        llm_client = gemini_client
+    elif current_llm_provider == "secure":
+        llm_client = secure_azure_openai_client
+    else:
+        llm_client = azure_openai_client
 
     # Use LLM to analyze query and match capabilities
     llm_result = await llm_client.generate_content(
@@ -108,19 +125,61 @@ async def health_check():
 # LLM Provider Management
 @router.get("/settings/llm-provider")
 async def get_llm_provider():
-    """Get current LLM provider"""
-    return JSONResponse({"provider": current_llm_provider})
+    """Get current LLM provider and configuration"""
+    return JSONResponse({
+        "provider": current_llm_provider,
+        "vaultName": llm_vault_name,
+        "temperature": llm_temperature,
+        "maxTokens": llm_max_tokens,
+        "topP": llm_top_p,
+    })
 
 
 @router.post("/settings/llm-provider")
 async def set_llm_provider(payload: LLMProviderRequest):
-    """Set the LLM provider (azure or gemini)"""
+    """Set the LLM provider (azure, gemini, or secure)"""
     global current_llm_provider
-    if payload.provider not in ["azure", "gemini"]:
-        raise HTTPException(status_code=400, detail="Invalid provider. Must be 'azure' or 'gemini'")
+    if payload.provider not in ["azure", "gemini", "secure"]:
+        raise HTTPException(status_code=400, detail="Invalid provider. Must be 'azure', 'gemini', or 'secure'")
     current_llm_provider = payload.provider
     logger.info(f"LLM provider changed to: {current_llm_provider}")
     return JSONResponse({"provider": current_llm_provider, "message": f"Switched to {payload.provider} LLM"})
+
+
+@router.post("/settings/llm-config")
+async def set_llm_config(payload: LLMConfigRequest):
+    """Set the LLM configuration"""
+    global current_llm_provider, llm_vault_name, llm_temperature, llm_max_tokens, llm_top_p
+    
+    if payload.provider not in ["azure", "gemini", "secure"]:
+        raise HTTPException(status_code=400, detail="Invalid provider. Must be 'azure', 'gemini', or 'secure'")
+    
+    if not (0 <= payload.temperature <= 1):
+        raise HTTPException(status_code=400, detail="Temperature must be between 0 and 1")
+    
+    if not (256 <= payload.maxTokens <= 4096):
+        raise HTTPException(status_code=400, detail="Max tokens must be between 256 and 4096")
+    
+    if not (0 <= payload.topP <= 1):
+        raise HTTPException(status_code=400, detail="Top P must be between 0 and 1")
+    
+    current_llm_provider = payload.provider
+    llm_vault_name = payload.vaultName
+    llm_temperature = payload.temperature
+    llm_max_tokens = payload.maxTokens
+    llm_top_p = payload.topP
+    
+    logger.info(f"LLM configuration updated: provider={current_llm_provider}, vault={llm_vault_name}, temperature={llm_temperature}, maxTokens={llm_max_tokens}, topP={llm_top_p}")
+    
+    return JSONResponse({
+        "status": "success",
+        "provider": current_llm_provider,
+        "vaultName": llm_vault_name,
+        "temperature": llm_temperature,
+        "maxTokens": llm_max_tokens,
+        "topP": llm_top_p,
+        "message": "LLM configuration updated successfully"
+    })
 
 
 # CRUD for Domains
@@ -308,7 +367,12 @@ async def generate_processes(payload: GenerateProcessRequest):
         logger.info(f"Using LLM provider: {current_llm_provider}")
         
         # Select LLM client based on current provider
-        llm_client = gemini_client if current_llm_provider == "gemini" else azure_openai_client
+        if current_llm_provider == "gemini":
+            llm_client = gemini_client
+        elif current_llm_provider == "secure":
+            llm_client = secure_azure_openai_client
+        else:
+            llm_client = azure_openai_client
         
         # Call the LLM to generate processes
         logger.info(f"Calling {current_llm_provider} LLM client.generate_processes...")
