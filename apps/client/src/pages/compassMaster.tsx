@@ -167,7 +167,6 @@ export default function Home() {
     'enterprise',
     'core',
     'process',
-    'subprocess',
   ];
 
   function openProcessModal(capId: number) {
@@ -332,35 +331,27 @@ export default function Home() {
         if (!p) continue;
         
         try {
-          // Create the top-level process
-          const created = await createProcess({
-            name: p.name,
-            level: p.level,
-            description: p.description || '',
-            capability_id: processCapId,
-          });
-          createdProcs.push(created);
-          
-          // Create selected subprocesses for this process
+          // Prepare selected subprocesses for this process
+          const selectedSubs: any[] = [];
           if (Array.isArray(p.subprocesses)) {
             for (let subIdx = 0; subIdx < p.subprocesses.length; subIdx++) {
               const subKey = `proc-${procIdx}-sub-${subIdx}`;
               if (selectedGeneratedIdxs.has(subKey)) {
                 const sub = p.subprocesses[subIdx];
-                try {
-                  await createProcess({
-                    name: sub.name,
-                    level: 'subprocess',
-                    description: sub.description || '',
-                    capability_id: processCapId,
-                  });
-                  // Subprocess created; don't add to root createdProcs since subprocesses are nested
-                } catch (err) {
-                  console.error('createProcess failed for subprocess', err);
-                }
+                selectedSubs.push({ name: sub.name, description: sub.description || '' });
               }
             }
           }
+
+          // Create the top-level process with its subprocesses in one call
+          const created = await createProcess({
+            name: p.name,
+            level: p.level,
+            description: p.description || '',
+            capability_id: processCapId,
+            subprocesses: selectedSubs.length > 0 ? selectedSubs : undefined,
+          });
+          createdProcs.push(created);
         } catch (err) {
           console.error('createProcess failed for generated item', err);
         }
@@ -549,119 +540,104 @@ export default function Home() {
                         </h3>
                         {c.processes.length === 0 ? (
                           <div className="text-gray-500 text-center py-8">No processes yet.</div>
-                        ) : (() => {
-                          // Separate core/parent processes from subprocesses based on level
-                          const coreProcesses = c.processes.filter(p => p.level === 'core' || p.level === 'enterprise' || p.level === 'process');
-                          const subprocessesByParent: { [key: number]: Process[] } = {};
-                          
-                          // Group subprocesses by their parent
-                          c.processes.filter(p => p.level === 'subprocess').forEach(sub => {
-                            const parentId = (coreProcesses[0]?.id as number) || 0;
-                            if (!subprocessesByParent[parentId]) {
-                              subprocessesByParent[parentId] = [];
-                            }
-                            subprocessesByParent[parentId].push(sub);
-                          });
+                        ) : (
+                          <div className="space-y-3">
+                            {c.processes.map((p) => {
+                              const subprocesses = Array.isArray(p.subprocesses) ? p.subprocesses : [];
+                              const hasSubprocesses = subprocesses.length > 0;
+                              const isSubprocessesExpanded = expandedProcessIds.has(p.id);
 
-                          return (
-                            <div className="space-y-3">
-                              {coreProcesses.map((p) => {
-                                const subprocesses = subprocessesByParent[p.id as number] || [];
-                                const hasSubprocesses = subprocesses.length > 0;
-                                const isSubprocessesExpanded = expandedProcessIds.has(p.id as number);
-                                
-                                return (
-                                  <div key={p.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-shadow">
-                                    {/* Core Process Header */}
-                                    <div className="p-4">
-                                      <div className="flex items-start justify-between gap-4">
-                                        <div className="flex-1">
-                                          <div className="flex items-center gap-3">
-                                            <div className="w-2 h-2 rounded-full bg-indigo-600 flex-shrink-0 mt-1"></div>
-                                            <div className="flex-1">
-                                              <h4 className="font-semibold text-gray-900">{p.name}</h4>
-                                              <div className="flex items-center gap-2 mt-2">
-                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800">
-                                                  {p.level}
+                              return (
+                                <div key={p.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-shadow">
+                                  {/* Core Process Header */}
+                                  <div className="p-4">
+                                    <div className="flex items-start justify-between gap-4">
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-3">
+                                          <div className="w-2 h-2 rounded-full bg-indigo-600 flex-shrink-0 mt-1"></div>
+                                          <div className="flex-1">
+                                            <h4 className="font-semibold text-gray-900">{p.name}</h4>
+                                            <div className="flex items-center gap-2 mt-2">
+                                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800">
+                                                {p.level}
+                                              </span>
+                                              {hasSubprocesses && (
+                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-200 text-gray-700 font-medium">
+                                                  {subprocesses.length} subprocess{subprocesses.length !== 1 ? 'es' : ''}
                                                 </span>
-                                                {hasSubprocesses && (
-                                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-200 text-gray-700 font-medium">
-                                                    {subprocesses.length} subprocess{subprocesses.length !== 1 ? 'es' : ''}
-                                                  </span>
-                                                )}
-                                              </div>
+                                              )}
                                             </div>
                                           </div>
-                                          {p.description && <p className="mt-2 text-sm text-gray-600 ml-5">{p.description}</p>}
                                         </div>
-                                        
-                                        <div className="flex items-center gap-1 flex-shrink-0">
-                                          <button 
-                                            className="w-8 h-8 flex items-center justify-center rounded-md text-red-600 hover:bg-red-50 transition-colors" 
-                                            title="Delete process" 
-                                            onClick={() => handleDeleteProcess(p.id, c.id)}
-                                          >
-                                            <FiTrash2 size={16} />
-                                          </button>
-                                        </div>
+                                        {p.description && <p className="mt-2 text-sm text-gray-600 ml-5">{p.description}</p>}
+                                      </div>
+
+                                      <div className="flex items-center gap-1 flex-shrink-0">
+                                        <button
+                                          className="w-8 h-8 flex items-center justify-center rounded-md text-red-600 hover:bg-red-50 transition-colors"
+                                          title="Delete process"
+                                          onClick={() => handleDeleteProcess(p.id, c.id)}
+                                        >
+                                          <FiTrash2 size={16} />
+                                        </button>
                                       </div>
                                     </div>
-
-                                    {/* Subprocesses Dropdown */}
-                                    {hasSubprocesses && (
-                                      <>
-                                        <button
-                                          onClick={() => toggleProcessExpand(p.id as number)}
-                                          className="w-full px-4 py-3 bg-indigo-50 border-t border-gray-200 hover:bg-indigo-100 transition-colors flex items-center justify-between gap-2"
-                                        >
-                                          <div className="flex items-center gap-2">
-                                            {isSubprocessesExpanded ? <FiChevronDown size={16} className="text-indigo-600" /> : <FiChevronRight size={16} className="text-indigo-600" />}
-                                            <span className="text-sm font-semibold text-indigo-900">Subprocesses</span>
-                                          </div>
-                                        </button>
-
-                                        {isSubprocessesExpanded && (
-                                          <ul className="divide-y divide-gray-200 bg-indigo-50">
-                                            {subprocesses.map((sub: any) => (
-                                              <li 
-                                                key={sub.id} 
-                                                className="px-4 py-3 hover:bg-indigo-100 transition-colors"
-                                              >
-                                                <div className="ml-6 flex items-start justify-between gap-4">
-                                                  <div className="flex items-start gap-3 flex-1">
-                                                    <div className="w-1.5 h-1.5 rounded-full bg-teal-500 flex-shrink-0 mt-1.5"></div>
-                                                    
-                                                    <div className="flex-1 min-w-0">
-                                                      <h5 className="font-semibold text-gray-800">{sub.name}</h5>
-                                                      <div className="flex items-center gap-2 mt-1">
-                                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">
-                                                          subprocess
-                                                        </span>
-                                                      </div>
-                                                      {sub.description && <p className="text-xs text-gray-600 mt-2">{sub.description}</p>}
-                                                    </div>
-                                                  </div>
-                                                  
-                                                  <button 
-                                                    className="w-8 h-8 flex items-center justify-center rounded-md text-red-600 hover:bg-red-50 transition-colors flex-shrink-0" 
-                                                    title="Delete subprocess" 
-                                                    onClick={() => handleDeleteProcess(sub.id, c.id, p.id)}
-                                                  >
-                                                    <FiTrash2 size={14} />
-                                                  </button>
-                                                </div>
-                                              </li>
-                                            ))}
-                                          </ul>
-                                        )}
-                                      </>
-                                    )}
                                   </div>
-                                );
-                              })}
-                            </div>
-                          );
-                        })()}
+
+                                  {/* Subprocesses Dropdown */}
+                                  {hasSubprocesses && (
+                                    <>
+                                      <button
+                                        onClick={() => toggleProcessExpand(p.id)}
+                                        className="w-full px-4 py-3 bg-indigo-50 border-t border-gray-200 hover:bg-indigo-100 transition-colors flex items-center justify-between gap-2"
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          {isSubprocessesExpanded ? <FiChevronDown size={16} className="text-indigo-600" /> : <FiChevronRight size={16} className="text-indigo-600" />}
+                                          <span className="text-sm font-semibold text-indigo-900">Subprocesses</span>
+                                        </div>
+                                      </button>
+
+                                      {isSubprocessesExpanded && (
+                                        <ul className="divide-y divide-gray-200 bg-indigo-50">
+                                          {subprocesses.map((sub: any) => (
+                                            <li
+                                              key={sub.id}
+                                              className="px-4 py-3 hover:bg-indigo-100 transition-colors"
+                                            >
+                                              <div className="ml-6 flex items-start justify-between gap-4">
+                                                <div className="flex items-start gap-3 flex-1">
+                                                  <div className="w-1.5 h-1.5 rounded-full bg-teal-500 flex-shrink-0 mt-1.5"></div>
+
+                                                  <div className="flex-1 min-w-0">
+                                                    <h5 className="font-semibold text-gray-800">{sub.name}</h5>
+                                                    <div className="flex items-center gap-2 mt-1">
+                                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">
+                                                        subprocess
+                                                      </span>
+                                                    </div>
+                                                    {sub.description && <p className="text-xs text-gray-600 mt-2">{sub.description}</p>}
+                                                  </div>
+                                                </div>
+
+                                                <button
+                                                  className="w-8 h-8 flex items-center justify-center rounded-md text-red-600 hover:bg-red-50 transition-colors flex-shrink-0"
+                                                  title="Delete subprocess"
+                                                  onClick={() => handleDeleteProcess(sub.id, c.id, p.id)}
+                                                >
+                                                  <FiTrash2 size={14} />
+                                                </button>
+                                              </div>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
                   </li>
