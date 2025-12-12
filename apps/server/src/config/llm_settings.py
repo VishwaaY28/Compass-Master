@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 # Default settings
 DEFAULT_SETTINGS = {
     "provider": "azure",
-    "vaultName": "https://kvcapabilitycompass.vault.azure.net/",
+    "vaultName": "https://fstoazuregpt5.vault.azure.net/",
     "temperature": 0.5,
     "topP": 0.9,
 }
