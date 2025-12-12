@@ -216,6 +216,16 @@ export default function Home() {
   const [generatedPreview, setGeneratedPreview] = useState<any[]>([]);
   const [isGeneratedModalOpen, setIsGeneratedModalOpen] = useState(false);
   
+  // Subprocess modal state
+  const [isSubprocessModalOpen, setIsSubprocessModalOpen] = useState(false);
+  const [subprocessParentProcessId, setSubprocessParentProcessId] = useState<number | null>(null);
+  const [subprocessParentCapId, setSubprocessParentCapId] = useState<number | null>(null);
+  const [manualSubprocessName, setManualSubprocessName] = useState('');
+  const [manualSubprocessDescription, setManualSubprocessDescription] = useState('');
+  const [isSavingSubprocess, setIsSavingSubprocess] = useState(false);
+  const [subprocessMode, setSubprocessMode] = useState<'manual' | 'ai'>('ai');
+  const [isGeneratingSubprocess, setIsGeneratingSubprocess] = useState(false);
+  
   const [selectedGeneratedIdxs, setSelectedGeneratedIdxs] = useState<Set<string>>(new Set());
   const [isSavingGenerated, setIsSavingGenerated] = useState(false);
 
@@ -237,6 +247,15 @@ export default function Home() {
     setManualProcessName('');
     setManualProcessDescription('');
     setIsProcessModalOpen(true);
+  }
+
+  function openSubprocessModal(parentProcessId: number, parentCapId: number) {
+    setSubprocessParentProcessId(parentProcessId);
+    setSubprocessParentCapId(parentCapId);
+    setManualSubprocessName('');
+    setManualSubprocessDescription('');
+    setSubprocessMode('ai');
+    setIsSubprocessModalOpen(true);
   }
 
   async function handleSaveManualProcess() {
@@ -263,6 +282,100 @@ export default function Home() {
       console.error(e);
     } finally {
       setIsSavingManual(false);
+    }
+  }
+
+  async function handleSaveManualSubprocess() {
+    if (!manualSubprocessName.trim() || subprocessParentProcessId == null || subprocessParentCapId == null) return;
+    try {
+      setIsSavingSubprocess(true);
+      const newSubprocess = await createProcess({
+        name: manualSubprocessName.trim(),
+        level: 'subprocess',
+        description: manualSubprocessDescription.trim(),
+        capability_id: subprocessParentCapId,
+        parent_process_id: subprocessParentProcessId,
+      });
+      setCapabilities((s) =>
+        s.map((c) =>
+          c.id === subprocessParentCapId
+            ? {
+                ...c,
+                processes: c.processes.map((p: any) =>
+                  p.id === subprocessParentProcessId
+                    ? { ...p, subprocesses: [...(p.subprocesses || []), newSubprocess] }
+                    : p
+                ),
+              }
+            : c
+        )
+      );
+      setIsSubprocessModalOpen(false);
+      setManualSubprocessName('');
+      setManualSubprocessDescription('');
+      toast.success('Subprocess created successfully');
+    } catch (e) {
+      toast.error('Failed to create subprocess');
+      console.error(e);
+    } finally {
+      setIsSavingSubprocess(false);
+    }
+  }
+
+  async function handleGenerateSubprocess() {
+    if (subprocessParentProcessId == null || subprocessParentCapId == null) return;
+    try {
+      setIsGeneratingSubprocess(true);
+      
+      const parentCapability = capabilities.find((c) => c.id === subprocessParentCapId);
+      const parentProcess = parentCapability?.processes.find((p: any) => p.id === subprocessParentProcessId);
+      
+      if (!parentCapability || !parentProcess) {
+        toast.error('Parent capability or process not found');
+        return;
+      }
+
+      const result = await generateProcesses(parentProcess.name, subprocessParentCapId, parentCapability.domain || '', 'subprocess', parentProcess.description || '');
+
+      if (result.status === 'success') {
+        let subprocessesFromLLM: any[] = [];
+        
+        console.log('[DEBUG] LLM Response for subprocesses:', result);
+        
+        if (result.data?.processes && Array.isArray(result.data.processes)) {
+          subprocessesFromLLM = result.data.processes;
+          console.log('[DEBUG] Using result.data.processes');
+        } else if (result.data?.subprocesses && Array.isArray(result.data.subprocesses)) {
+          subprocessesFromLLM = result.data.subprocesses;
+          console.log('[DEBUG] Using result.data.subprocesses');
+        } else if (Array.isArray(result.data)) {
+          subprocessesFromLLM = result.data;
+          console.log('[DEBUG] Using result.data directly as array');
+        }
+
+        const normalized = (Array.isArray(subprocessesFromLLM) ? subprocessesFromLLM : []).map((proc: any, idx: number) => ({
+          tempId: idx,
+          name: proc.name,
+          description: proc.description,
+          category: proc.category || '',
+          level: 'subprocess',
+          subprocesses: [],
+        }));
+
+        console.log('[DEBUG] normalized subprocesses:', normalized);
+        setGeneratedPreview(normalized);
+        setSelectedGeneratedIdxs(new Set());
+        setIsGeneratedModalOpen(true);
+        toast.success(`AI generated ${normalized.length} subprocesses (preview). Please select which to save.`);
+        setIsSubprocessModalOpen(false);
+      } else {
+        toast.error('Failed to generate subprocesses');
+      }
+    } catch (e) {
+      toast.error('Failed to generate subprocesses');
+      console.error(e);
+    } finally {
+      setIsGeneratingSubprocess(false);
     }
   }
 
@@ -398,10 +511,18 @@ export default function Home() {
 
    
   async function saveSelectedGeneratedProcesses() {
-    if (processCapId == null) return;
+    // Check if we're saving subprocesses or processes
+    const isSavingSubprocesses = subprocessParentProcessId != null;
+    
+    if (isSavingSubprocesses) {
+      if (subprocessParentCapId == null) return;
+    } else {
+      if (processCapId == null) return;
+    }
+    
     if (!Array.isArray(generatedPreview) || generatedPreview.length === 0) return;
     if (selectedGeneratedIdxs.size === 0) {
-      toast('No processes selected to save');
+      toast('No items selected to save');
       return;
     }
 
@@ -409,18 +530,16 @@ export default function Home() {
       setIsSavingGenerated(true);
       const createdProcs: any[] = [];
       
-      
       for (let procIdx = 0; procIdx < generatedPreview.length; procIdx++) {
         const procKey = `proc-${procIdx}`;
-        const isProcessSelected = selectedGeneratedIdxs.has(procKey);
+        const isItemSelected = selectedGeneratedIdxs.has(procKey);
         
-        if (!isProcessSelected) continue; 
+        if (!isItemSelected) continue; 
         
         const p = generatedPreview[procIdx];
         if (!p) continue;
         
         try {
-          
           const selectedSubs: any[] = [];
           if (Array.isArray(p.subprocesses)) {
             for (let subIdx = 0; subIdx < p.subprocesses.length; subIdx++) {
@@ -432,34 +551,61 @@ export default function Home() {
             }
           }
 
-          
-          const created = await createProcess({
+          const capId = isSavingSubprocesses ? subprocessParentCapId : processCapId;
+          const createPayload: any = {
             name: p.name,
             level: p.level,
             description: p.description || '',
-            capability_id: processCapId,
+            capability_id: capId,
             category: p.category || undefined,
-            subprocesses: selectedSubs.length > 0 ? selectedSubs : undefined,
-          });
+          };
+
+          if (isSavingSubprocesses) {
+            createPayload.parent_process_id = subprocessParentProcessId;
+          } else {
+            if (selectedSubs.length > 0) {
+              createPayload.subprocesses = selectedSubs;
+            }
+          }
+          
+          const created = await createProcess(createPayload);
           createdProcs.push(created);
         } catch (err) {
           console.error('createProcess failed for generated item', err);
         }
       }
 
-      
       if (createdProcs.length > 0) {
-        setCapabilities((prev) =>
-          prev.map((c) => (c.id === processCapId ? { ...c, processes: [...(c.processes || []), ...createdProcs] } : c))
-        );
-        if (processCapId != null) setExpandedIds((prev) => (prev.includes(processCapId) ? prev : [processCapId, ...prev]));
-        toast.success(`Saved ${createdProcs.length} processes`);
+        if (isSavingSubprocesses) {
+          // Update subprocesses
+          setCapabilities((prev) =>
+            prev.map((c) =>
+              c.id === subprocessParentCapId
+                ? {
+                    ...c,
+                    processes: c.processes.map((proc: any) =>
+                      proc.id === subprocessParentProcessId
+                        ? { ...proc, subprocesses: [...(proc.subprocesses || []), ...createdProcs] }
+                        : proc
+                    ),
+                  }
+                : c
+            )
+          );
+        } else {
+          // Update processes
+          setCapabilities((prev) =>
+            prev.map((c) => (c.id === processCapId ? { ...c, processes: [...(c.processes || []), ...createdProcs] } : c))
+          );
+          if (processCapId != null) setExpandedIds((prev) => (prev.includes(processCapId) ? prev : [processCapId, ...prev]));
+        }
+        toast.success(`Saved ${createdProcs.length} ${isSavingSubprocesses ? 'subprocesses' : 'processes'}`);
       } else {
-        toast.error('No processes were saved');
+        toast.error(`No ${isSavingSubprocesses ? 'subprocesses' : 'processes'} were saved`);
       }
     } catch (e) {
       console.error(e);
-      toast.error('Failed to save selected processes');
+      toast.error(`Failed to save selected ${isSavingSubprocesses ? 'subprocesses' : 'processes'}`);
     } finally {
       setIsSavingGenerated(false);
       setIsGeneratedModalOpen(false);
@@ -662,7 +808,7 @@ export default function Home() {
                             {c.processes.map((p) => {
                               const subprocesses = Array.isArray(p.subprocesses) ? p.subprocesses : [];
                               const hasSubprocesses = subprocesses.length > 0;
-                              const isSubprocessesExpanded = expandedProcessIds.has(p.id);
+                              const isSubprocessesExpanded = expandedProcessIds.has(Number(p.id));
 
                               return (
                                 <div key={p.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-shadow">
@@ -696,6 +842,13 @@ export default function Home() {
 
                                       <div className="flex items-center gap-1 flex-shrink-0">
                                         <button
+                                          className="w-8 h-8 flex items-center justify-center rounded-md bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+                                          title="Add subprocess"
+                                          onClick={() => openSubprocessModal(Number(p.id), c.id)}
+                                        >
+                                          <FiPlus size={16} />
+                                        </button>
+                                        <button
                                           className="w-8 h-8 flex items-center justify-center rounded-md text-red-600 hover:bg-red-50 transition-colors"
                                           title="Delete process"
                                           onClick={() => handleDeleteProcess(p.id, c.id)}
@@ -710,7 +863,7 @@ export default function Home() {
                                   {hasSubprocesses && (
                                     <>
                                       <button
-                                        onClick={() => toggleProcessExpand(p.id)}
+                                        onClick={() => toggleProcessExpand(Number(p.id))}
                                         className="w-full px-4 py-3 bg-indigo-50 border-t border-gray-200 hover:bg-indigo-100 transition-colors flex items-center justify-between gap-2"
                                       >
                                         <div className="flex items-center gap-2">
@@ -1144,6 +1297,114 @@ export default function Home() {
                   {isSavingGenerated ? 'Saving...' : `Save selected (${selectedGeneratedIdxs.size})`}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isSubprocessModalOpen && (
+        <div className="fixed inset-0 flex items-center justify-center z-50">
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setIsSubprocessModalOpen(false)} />
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md z-50 overflow-hidden">
+            <div className="border-b border-gray-100 px-6 py-3 bg-gray-50 flex items-center gap-3">
+              <FiEdit3 className="w-5 h-5 text-blue-600" />
+              <h2 className="text-lg font-bold text-gray-900">Add subprocess</h2>
+            </div>
+
+            <div className="p-6">
+              {/* Subtle Mode Toggle - Tab Style */}
+              <div className="inline-flex gap-1 mb-6 p-1 bg-gray-100 rounded-lg">
+                <button
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
+                    subprocessMode === 'manual'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                  onClick={() => setSubprocessMode('manual')}
+                >
+                  Add Manually
+                </button>
+                <button
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
+                    subprocessMode === 'ai'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                  onClick={() => setSubprocessMode('ai')}
+                >
+                  Generate with AI
+                </button>
+              </div>
+
+              {/* Manual Mode */}
+              {subprocessMode === 'manual' && (
+                <>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Subprocess Name</label>
+                  <input
+                    className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 mb-4"
+                    placeholder="Enter subprocess name..."
+                    value={manualSubprocessName}
+                    onChange={(e) => setManualSubprocessName(e.target.value)}
+                  />
+
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
+                  <textarea
+                    className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[100px] resize-y"
+                    placeholder="Enter subprocess description..."
+                    rows={3}
+                    value={manualSubprocessDescription}
+                    onChange={(e) => setManualSubprocessDescription(e.target.value)}
+                  />
+
+                  <div className="flex justify-end gap-3 mt-6">
+                    <button
+                      className="px-3 py-1.5 rounded-md text-gray-600 hover:bg-gray-100 font-medium"
+                      onClick={() => {
+                        setIsSubprocessModalOpen(false);
+                        setManualSubprocessName('');
+                        setManualSubprocessDescription('');
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="px-4 py-1.5 bg-indigo-600 text-white rounded-md font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                      onClick={handleSaveManualSubprocess}
+                      disabled={!manualSubprocessName.trim() || isSavingSubprocess}
+                    >
+                      <FiPlus className="w-4 h-4" />
+                      {isSavingSubprocess ? 'Creating...' : 'Create Subprocess'}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* AI Generation Mode */}
+              {subprocessMode === 'ai' && (
+                <>
+                  <p className="text-sm text-gray-600 mb-4">
+                    AI will generate subprocesses based on the parent process name and description.
+                  </p>
+
+                  <div className="flex justify-end gap-3 mt-6">
+                    <button
+                      className="px-3 py-1.5 rounded-md text-gray-600 hover:bg-gray-100 font-medium"
+                      onClick={() => setIsSubprocessModalOpen(false)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="px-4 py-1.5 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                      onClick={handleGenerateSubprocess}
+                      disabled={isGeneratingSubprocess}
+                      title="Generate subprocesses using AI"
+                    >
+                      <FiPlus className="w-4 h-4" />
+                      {isGeneratingSubprocess ? 'Generating...' : 'Generate with AI'}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
