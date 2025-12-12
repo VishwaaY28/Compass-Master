@@ -38,21 +38,23 @@ class AzureOpenAIClient:
         if self._config is None:
             kv_url = self.key_vault_url
             api_key = None
+            endpoint = None
             credential = DefaultAzureCredential()
             client = SecretClient(vault_url=kv_url, credential=credential)
             try:
-                api_key = client.get_secret("kvCapabilityCompassKeyLLM").value
+                api_key = client.get_secret("llm-key").value
+                endpoint = client.get_secret("llm-endpoint").value
                 logger.info("API Key loaded from Key Vault")
             except Exception as e:
                 logger.warning(
                     f"kvCapabilityCompassKeyLLM not found in Key Vault or access denied: {e}; will try environment variable AZURE_OPENAI_API_KEY")
-                api_key = env.get("AZURE_OPENAI_API_KEY")
+                api_key = env.get("llm-key")
 
             self._config = {
                 "api_key": api_key,
-                "endpoint": "https://stg-secureapi.hexaware.com/api/azureai",
-                "api_version": "2024-12-01-preview",
-                "model": "gpt-4o",
+                "endpoint": endpoint,
+                "api_version": "2025-01-01-preview",
+                "model": "gpt-5.1",
             }
 
             if self._config.get("api_key"):
