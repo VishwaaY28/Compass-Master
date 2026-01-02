@@ -118,6 +118,15 @@ export function useCapabilityApi() {
 		return res;
 	}, []);
 
+	const createSubprocess = useCallback(async (data: { name: string; description: string; category?: string; parent_process_id: number }) => {
+		const res = await fetcher<any>(`${BASE_URL}/subprocesses`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(data),
+		});
+		return res;
+	}, []);
+
 	const updateProcess = useCallback(async (id: number, data: Partial<Process>) => {
 		const res = await fetcher<Process>(`${BASE_URL}/processes/${id}`, {
 			method: 'PUT',
@@ -157,6 +166,7 @@ export function useCapabilityApi() {
 		deleteCapability,
 		listProcesses,
 		createProcess,
+		createSubprocess,
 		updateProcess,
 		deleteProcess,
 		generateProcesses,

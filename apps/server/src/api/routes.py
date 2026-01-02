@@ -106,6 +106,12 @@ class SubProcessCreateRequest(BaseModel):
     description: Optional[str] = None
     category: Optional[str] = None
 
+class SubProcessCreateRequestWithParent(BaseModel):
+    name: str
+    description: str
+    category: Optional[str] = None
+    parent_process_id: int
+
 class ProcessCreateRequest(BaseModel):
     name: str
     level: str
@@ -435,6 +441,37 @@ async def delete_process(process_id: int):
     return {"deleted": True}
 
 
+@router.post("/subprocesses")
+async def create_subprocess(payload: SubProcessCreateRequestWithParent):
+    """Create a new subprocess for a given parent process"""
+    from database.models import Process as ProcessModel, SubProcess as SubProcessModel
+    
+    # Get the parent process
+    try:
+        parent_process = await ProcessModel.get(id=payload.parent_process_id, deleted_at=None)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Parent process not found")
+    
+    # Create the subprocess
+    subproc = await SubProcessModel.create(
+        name=payload.name,
+        description=payload.description,
+        category=payload.category,
+        process=parent_process
+    )
+    
+    result = {
+        "id": subproc.id,
+        "name": subproc.name,
+        "level": "subprocess",
+        "description": subproc.description,
+        "category": getattr(subproc, "category", None),
+        "parent_process_id": payload.parent_process_id,
+    }
+    
+    return JSONResponse(result)
+
+
 class GenerateProcessRequest(BaseModel):
     capability_name: str
     capability_id: int
@@ -452,13 +489,13 @@ async def generate_processes(payload: GenerateProcessRequest):
         provider = await llm_settings_manager.get_setting("provider", "secure")
         logger.info(f"Using LLM provider: {provider}")
         
-        # Select LLM client based on current provider
+        
         if provider == "gemini":
             llm_client = gemini_client
         else:
             llm_client = azure_openai_client
         
-        # Call the LLM to generate processes
+        
         logger.info(f"Calling {provider} LLM client.generate_processes...")
         print(f"[DEBUG] /processes/generate payload: capability_name={payload.capability_name}, capability_id={payload.capability_id}, domain={payload.domain}, process_type={payload.process_type}, capability_description={payload.capability_description}")
         try:
