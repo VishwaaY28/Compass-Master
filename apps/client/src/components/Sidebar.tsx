@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FiChevronLeft, FiChevronRight, FiLogOut, FiHome, FiLayers, FiSettings, FiX } from 'react-icons/fi';
+import { FiChevronLeft, FiChevronRight,FiEye, FiLogOut, FiHome, FiLayers, FiSettings, FiX } from 'react-icons/fi';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
@@ -27,6 +27,7 @@ const Sidebar: React.FC = () => {
   const navItems = [
     { label: 'Capability Master', path: '/dashboard', icon: FiHome },
     { label: 'Capability Compass', path: '/dashboard/research-agent', icon: FiLayers },
+    { label: 'Compass View', path: '/dashboard/compass-view', icon: FiEye },
   ];
 
   // Load current LLM settings on mount
