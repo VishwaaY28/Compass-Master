@@ -49,12 +49,3 @@ class LLMSettings(TimestampMixin):
   
   class Meta:
     table = "llm_settings"
-
-
-class PromptTemplate(TimestampMixin):
-    id = fields.IntField(pk=True)
-    process_level = fields.CharEnumField(ProcessLevel, unique=True, null=True) # e.g. 'core', 'subprocess' mapped to enum
-    prompt = fields.TextField()
-
-    class Meta:
-        table = "prompt_templates"

@@ -478,7 +478,6 @@ class GenerateProcessRequest(BaseModel):
     capability_description: Optional[str] = None
     domain: str
     process_type: str
-    system_prompt: Optional[str] = None
 
 
 @router.post("/processes/generate")
@@ -504,8 +503,7 @@ async def generate_processes(payload: GenerateProcessRequest):
                 payload.capability_name, 
                 payload.capability_description or "", 
                 payload.domain, 
-                payload.process_type,
-                payload.system_prompt
+                payload.process_type
             )
             logger.info(f"LLM returned: {llm_result}")
             print(f"[DEBUG] LLM returned: {llm_result}")
@@ -560,139 +558,5 @@ async def generate_processes(payload: GenerateProcessRequest):
     except Exception as e:
         logger.error(f"Error generating processes: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to generate processes: {str(e)}")
-
-
-# Prompt Management
-from database.models import PromptTemplate as PromptTemplateModel
-PromptTemplate_Pydantic = pydantic_model_creator(PromptTemplateModel, name="PromptTemplate")
-
-class PromptUpdateRequest(BaseModel):
-    prompt: str
-
-@router.get("/prompts", response_model=List[PromptTemplate_Pydantic])
-async def list_prompt_templates():
-    return await PromptTemplate_Pydantic.from_queryset(PromptTemplateModel.all())
-
-@router.put("/prompts/{prompt_id}", response_model=PromptTemplate_Pydantic)
-async def update_prompt_template(prompt_id: int, payload: PromptUpdateRequest):
-    from database.repositories import prompt_repository
-    updated = await prompt_repository.update_prompt_template(prompt_id, payload.prompt)
-    if not updated:
-        raise HTTPException(status_code=404, detail="Prompt template not found")
-    return await PromptTemplate_Pydantic.from_tortoise_orm(updated)
-
-@router.post("/prompts/seed")
-async def seed_prompts():
-    """Seed default prompts if they don't exist"""
-    from database.repositories import prompt_repository
-    from database.models import ProcessLevel
-    
-    # Define prompts for each process level
-    prompts_data = {
-        ProcessLevel.ENTERPRISE: (
-            "You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in classifying business capabilities."
-            "\n\n## Task:\n"
-            "Generate a **comprehensive list of high-level Business Capabilities (Processes)** for the sub-vertical **'{capability_name}'** within the **{domain}** domain. The processes must be categorized by their **Process Type** (Core or Support)."
-            "\n\n## Input Variables:\n"
-            "- **domain**: {domain}\n"
-            "- **subvertical_name**: {capability_name},{capability_description}\n"
-            "- **process_type_filter**: {process_type} (Filter: Only generate processes matching this type: 'Core' or 'Support')"
-            "\n\n## Requirements:\n"
-            "- The list must be **comprehensive**, capturing all relevant, high-level capabilities in the specified sub-vertical and matching the `{process_type}` filter. **Do not impose a limit on the number of processes.**"
-            "- Each capability must have a **Name** (Business Process), a **Category** (Front/Middle/Back Office), a **Type** (Core/Support), and a detailed **Description** (Activities and Description)."
-            "- The **Category** must be one of: **'Front Office'**, **'Middle Office'**, or **'Back Office'**."
-            "- The **Type** must strictly match the `{process_type}` provided ('Core' or 'Support')."
-            "- Do not invent processes; base them strictly on standard industry practices for Enterprise Architecture in the specified domain and sub-vertical."
-            "- If the domain/sub-vertical combination is not recognized or has no relevant processes for the specified type, return: {{'error': 'No relevant {process_type} capabilities found for {capability_name} in {domain}'}}\n"
-            "\n\n## Output Format:\n"
-            "Return the data as a valid JSON object matching the schema below. The output must be an array of process objects."
-            "\n\n### JSON Schema:\n"
-            '{\n'
-            '  "processes": [\n'
-            '    {\n'
-            '      "name": "string (e.g., Client Onboarding & KYC)",\n'
-            '      "category": "string (Front Office | Middle Office | Back Office)",\n'
-            '      "process_type": "string (Core | Support)",\n'
-            '      "description": "string (Detailed description of activities)"\n'
-            '    },\n'
-            '    // ... additional process objects\n'
-            '  ]\n'
-            '}'
-        ),
-        ProcessLevel.CORE: (
-            "You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in classifying business capabilities."
-            "\n\n## Task:\n"
-            "Generate a **comprehensive list of high-level Business Capabilities (Processes)** for the sub-vertical **'{capability_name}'** within the **{domain}** domain. The processes must be categorized by their **Process Type** (Core or Support)."
-            "\n\n## Input Variables:\n"
-            "- **domain**: {domain}\n"
-            "- **subvertical_name**: {capability_name},{capability_description}\n"
-            "- **process_type_filter**: {process_type} (Filter: Only generate processes matching this type: 'Core' or 'Support')"
-            "\n\n## Requirements:\n"
-            "- The list must be **comprehensive**, capturing all relevant, high-level capabilities in the specified sub-vertical and matching the `{process_type}` filter. **Do not impose a limit on the number of processes.**"
-            "- Each capability must have a **Name** (Business Process), a **Category** (Front/Middle/Back Office), a **Type** (Core/Support), and a detailed **Description** (Activities and Description)."
-            "- The **Category** must be one of: **'Front Office'**, **'Middle Office'**, or **'Back Office'**."
-            "- The **Type** must strictly match the `{process_type}` provided ('Core' or 'Support')."
-            "- Do not invent processes; base them strictly on standard industry practices for Enterprise Architecture in the specified domain and sub-vertical."
-            "- If the domain/sub-vertical combination is not recognized or has no relevant processes for the specified type, return: {{'error': 'No relevant {process_type} capabilities found for {capability_name} in {domain}'}}\n"
-            "\n\n## Output Format:\n"
-            "Return the data as a valid JSON object matching the schema below. The output must be an array of process objects."
-            "\n\n### JSON Schema:\n"
-            '{\n'
-            '  "processes": [\n'
-            '    {\n'
-            '      "name": "string (e.g., Client Onboarding & KYC)",\n'
-            '      "category": "string (Front Office | Middle Office | Back Office)",\n'
-            '      "process_type": "string (Core | Support)",\n'
-            '      "description": "string (Detailed description of activities)"\n'
-            '    },\n'
-            '    // ... additional process objects\n'
-            '  ]\n'
-            '}'
-        ),
-        ProcessLevel.PROCESS: (
-            "You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in classifying business capabilities."
-            "\n\n## Task:\n"
-            "Generate a **comprehensive list of high-level Business Capabilities (Processes)** for the sub-vertical **'{capability_name}'** within the **{domain}** domain. The processes must be categorized by their **Process Type** (Core or Support)."
-            "\n\n## Input Variables:\n"
-            "- **domain**: {domain}\n"
-            "- **subvertical_name**: {capability_name},{capability_description}\n"
-            "- **process_type_filter**: {process_type} (Filter: Only generate processes matching this type: 'Core' or 'Support')"
-            "\n\n## Requirements:\n"
-            "- The list must be **comprehensive**, capturing all relevant, high-level capabilities in the specified sub-vertical and matching the `{process_type}` filter. **Do not impose a limit on the number of processes.**"
-            "- Each capability must have a **Name** (Business Process), a **Category** (Front/Middle/Back Office), a **Type** (Core/Support), and a detailed **Description** (Activities and Description)."
-            "- The **Category** must be one of: **'Front Office'**, **'Middle Office'**, or **'Back Office'**."
-            "- The **Type** must strictly match the `{process_type}` provided ('Core' or 'Support')."
-            "- Do not invent processes; base them strictly on standard industry practices for Enterprise Architecture in the specified domain and sub-vertical."
-            "- If the domain/sub-vertical combination is not recognized or has no relevant processes for the specified type, return: {{'error': 'No relevant {process_type} capabilities found for {capability_name} in {domain}'}}\n"
-            "\n\n## Output Format:\n"
-            "Return the data as a valid JSON object matching the schema below. The output must be an array of process objects."
-            "\n\n### JSON Schema:\n"
-            '{\n'
-            '  "processes": [\n'
-            '    {\n'
-            '      "name": "string (e.g., Client Onboarding & KYC)",\n'
-            '      "category": "string (Front Office | Middle Office | Back Office)",\n'
-            '      "process_type": "string (Core | Support)",\n'
-            '      "description": "string (Detailed description of activities)"\n'
-            '    },\n'
-            '    // ... additional process objects\n'
-            '  ]\n'
-            '}'
-        ),
-    }
-    
-    # Seed all prompts in bulk
-    for level, prompt_text in prompts_data.items():
-        existing = await prompt_repository.get_prompt_template_by_process_level(level)
-        if not existing:
-            await prompt_repository.create_prompt_template(
-                process_level=level,
-                prompt=prompt_text
-            )
-            logger.info(f"Seeded prompt for '{level.value}'")
-    
-    return {"message": "Prompts seeded successfully"}
-
-
 
 

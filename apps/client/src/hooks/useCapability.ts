@@ -26,15 +26,6 @@ export type Capability = {
 	processes: Process[];
 };
 
-export type PromptTemplate = {
-	id: number;
-	name: string;
-	template_text: string;
-	description: string;
-	input_variables: string[];
-	process_type?: string;
-};
-
 
 const BASE_URL = '/api';
 
@@ -149,7 +140,7 @@ export function useCapabilityApi() {
 		await fetcher(`${BASE_URL}/processes/${id}`, { method: 'DELETE' });
 	}, []);
 
-	const generateProcesses = useCallback(async (capabilityName: string, capabilityId: number, domain: string, processType: string, capabilityDescription: string = '', systemPrompt?: string) => {
+	const generateProcesses = useCallback(async (capabilityName: string, capabilityId: number, domain: string, processType: string, capabilityDescription: string = '') => {
 		const res = await fetcher<any>(`${BASE_URL}/processes/generate`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -159,28 +150,9 @@ export function useCapabilityApi() {
 				capability_description: capabilityDescription,
 				domain: domain,
 				process_type: processType,
-				system_prompt: systemPrompt,
 			}),
 		});
 		return res;
-	}, []);
-
-	// Prompts
-	const listPrompts = useCallback(async () => {
-		return fetcher<PromptTemplate[]>(`${BASE_URL}/prompts`);
-	}, []);
-
-	const updatePrompt = useCallback(async (id: number, data: { template_text: string; description?: string }) => {
-		const res = await fetcher<PromptTemplate>(`${BASE_URL}/prompts/${id}`, {
-			method: 'PUT',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(data),
-		});
-		return res;
-	}, []);
-
-	const seedPrompts = useCallback(async () => {
-		return fetcher<any>(`${BASE_URL}/prompts/seed`, { method: 'POST' });
 	}, []);
 
 	return {
@@ -198,9 +170,6 @@ export function useCapabilityApi() {
 		updateProcess,
 		deleteProcess,
 		generateProcesses,
-		listPrompts,
-		updatePrompt,
-		seedPrompts,
 	};
 
 }
