@@ -141,9 +141,8 @@ class AzureOpenAIClient:
             # fails when the vault is misconfigured (preventing generation)
             vault_url = settings.get("vaultName")
             if vault_url:
-                    self.key_vault_url = vault_url
-
-                    config = self._load_config(settings)
+                self.key_vault_url = vault_url
+                config = self._load_config(settings)
             client = self._get_client()
 
             
@@ -236,10 +235,15 @@ class AzureOpenAIClient:
                                     {{
                                       "processes": [
                                         {{
-                                          "name": "string (e.g., Client Onboarding & KYC)",
+                                          "name": "string (e.g., Market research & strategy development,
+• Deal origination & sourcing,
+• Investment screening & initial evaluation,
+• Due Diligence,
+• Financial Analysis & Deal Structuring,
+• Transaction Execution & Closing)",
                                           "category": "string (Front Office | Middle Office | Back Office)",
                                           "process_type": "string (Core | Support)",
-                                          "description": "string (Detailed description of activities)"
+                                          "description": "string (description of activities)"
                                         }},
                                         // ... additional process objects
                                       ]
