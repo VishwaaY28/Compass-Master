@@ -7,6 +7,39 @@ import { useCapabilityApi } from '../hooks/useCapability';
 import type { Capability, Process, Domain } from '../hooks/useCapability';
 import favicon from '../assets/favicon.png';
 
+const SYSTEM_PROMPT = `You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in classifying business capabilities.
+
+## Task:
+Generate a **comprehensive list of high-level Business Capabilities (Processes)** for the sub-vertical **'{capability_name}'** within the **{domain}** domain. The processes must be categorized by their **Process Type** (Core or Support).
+
+## Input Variables:
+- **domain**: {domain}
+- **subvertical_name**: {capability_name},{capability_description}
+- **process_type_filter**: {process_type} (Filter: Only generate processes matching this type: 'Core' or 'Support')
+
+## Requirements:
+- The list must be **comprehensive**, capturing all relevant, high-level capabilities in the specified sub-vertical and matching the \`{process_type}\` filter. **Do not impose a limit on the number of processes.**
+- Each capability must have a **Name** (Business Process), a **Category** (Front/Middle/Back Office), a **Type** (Core/Support), and a detailed **Description** (Activities and Description).
+- The **Category** must be one of: **'Front Office'**, **'Middle Office'**, or **'Back Office'**.
+- The **Type** must strictly match the \`{process_type}\` provided ('Core' or 'Support').
+- Do not invent processes; base them strictly on standard industry practices for Enterprise Architecture in the specified domain and sub-vertical.
+- If the domain/sub-vertical combination is not recognized or has no relevant processes for the specified type, return: {{'error': 'No relevant {process_type} capabilities found for {capability_name} in {domain}'}}
+
+## Output Format:
+Return the data as a valid JSON object matching the schema below. The output must be an array of process objects.
+
+### JSON Schema:
+{{
+  "processes": [
+    {{
+      "name": "string (e.g., Market research & strategy development, Deal origination & sourcing, Investment screening & initial evaluation, Due Diligence, Financial Analysis & Deal Structuring, Transaction Execution & Closing)",
+      "category": "string (Front Office | Middle Office | Back Office)",
+      "process_type": "string (Core | Support)",
+      "description": "string (description of activities)"
+    }},
+    // ... additional process objects
+  ]
+}}`;
 
 export default function Home() {
   const [domains, setDomains] = useState<Domain[]>([]);
@@ -32,6 +65,7 @@ export default function Home() {
     deleteProcess,
     deleteCapability,
     generateProcesses,
+    getPromptTemplate,
   } = useCapabilityApi();
 
   const [newDomainName, setNewDomainName] = useState('');
@@ -213,6 +247,7 @@ export default function Home() {
   const [manualProcessName, setManualProcessName] = useState('');
   const [manualProcessDescription, setManualProcessDescription] = useState('');
   const [isSavingManual, setIsSavingManual] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
   // Generated processes preview modal (LLM responses) - user must approve which to save
   const [generatedPreview, setGeneratedPreview] = useState<any[]>([]);
   const [isGeneratedModalOpen, setIsGeneratedModalOpen] = useState(false);
@@ -226,6 +261,7 @@ export default function Home() {
   const [isSavingSubprocess, setIsSavingSubprocess] = useState(false);
   const [subprocessMode, setSubprocessMode] = useState<'manual' | 'ai'>('ai');
   const [isGeneratingSubprocess, setIsGeneratingSubprocess] = useState(false);
+  const [aiSubprocessPrompt, setAiSubprocessPrompt] = useState('');
   
   const [selectedGeneratedIdxs, setSelectedGeneratedIdxs] = useState<Set<string>>(new Set());
   const [isSavingGenerated, setIsSavingGenerated] = useState(false);
@@ -247,6 +283,7 @@ export default function Home() {
     setProcessMode('ai');
     setManualProcessName('');
     setManualProcessDescription('');
+    setAiPrompt('');
     setIsProcessModalOpen(true);
   }
 
@@ -256,8 +293,26 @@ export default function Home() {
     setManualSubprocessName('');
     setManualSubprocessDescription('');
     setSubprocessMode('ai');
+    setAiSubprocessPrompt('');
     setIsSubprocessModalOpen(true);
   }
+
+  useEffect(() => {
+    if (processLevel && isProcessModalOpen && processMode === 'ai') {
+      getPromptTemplate(processLevel).then((data) => {
+        setAiPrompt(data.prompt);
+      }).catch((e) => {
+        console.error('Failed to fetch prompt', e);
+        setAiPrompt('');
+      });
+    }
+  }, [processLevel, isProcessModalOpen, processMode, getPromptTemplate]);
+
+  useEffect(() => {
+    if (isSubprocessModalOpen && subprocessMode === 'ai') {
+      setAiSubprocessPrompt("Generate subprocesses for the process '{process_name}' (Description: {process_description}) in the {domain} domain. Return ONLY valid JSON with a 'subprocesses' array containing subprocess objects with 'name', 'category', and 'description' fields.");
+    }
+  }, [isSubprocessModalOpen, subprocessMode]);
 
   async function handleSaveManualProcess() {
     if (!manualProcessName.trim() || processCapId == null) return;
@@ -335,7 +390,7 @@ export default function Home() {
         return;
       }
 
-      const result = await generateProcesses(parentProcess.name, subprocessParentCapId, parentCapability.domain || '', 'subprocess', parentProcess.description || '');
+      const result = await generateProcesses(parentProcess.name, subprocessParentCapId, parentCapability.domain || '', 'subprocess', parentProcess.description || '', aiSubprocessPrompt);
 
       if (result.status === 'success') {
         let subprocessesFromLLM: any[] = [];
@@ -390,7 +445,7 @@ export default function Home() {
         return;
       }
 
-      const result = await generateProcesses(parentCapability.name, processCapId, parentCapability.domain || '', processLevel, parentCapability.description || '');
+      const result = await generateProcesses(parentCapability.name, processCapId, parentCapability.domain || '', processLevel, parentCapability.description || '', aiPrompt);
 
       if (result.status === 'success') {
         const created = result.processes || [];
@@ -1003,16 +1058,16 @@ export default function Home() {
       {isProcessModalOpen && (
         <div className="fixed inset-0 flex items-center justify-center z-50">
           <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setIsProcessModalOpen(false)} />
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md z-50 overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[75vh] z-50 overflow-hidden flex flex-col">
             <div className="border-b border-gray-100 px-6 py-3 bg-gray-50 flex items-center gap-3">
               <FiEdit3 className="w-5 h-5 text-blue-600" />
               <h2 className="text-lg font-bold text-gray-900">Add process</h2>
               {parentCap && <span className="text-xs text-gray-400 ml-2">to {parentCap.name}</span>}
             </div>
 
-            <div className="p-6">
+            <div className="p-4 flex-1 overflow-y-auto">
               {/* Subtle Mode Toggle - Tab Style */}
-              <div className="inline-flex gap-1 mb-6 p-1 bg-gray-100 rounded-lg">
+              <div className="inline-flex gap-1 mb-4 p-1 bg-gray-100 rounded-lg">
                 <button
                   className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
                     processMode === 'manual'
@@ -1102,6 +1157,23 @@ export default function Home() {
                       </option>
                     ))}
                   </select>
+
+                  <label className="block text-sm font-medium text-gray-700 mb-2">System Prompt (Read-only)</label>
+                  <textarea
+                    className="w-full bg-gray-100 border border-gray-200 rounded-xl px-4 py-3 text-gray-600 min-h-[80px] resize-y text-sm"
+                    rows={4}
+                    value={SYSTEM_PROMPT}
+                    readOnly
+                  />
+
+                  <label className="block text-sm font-medium text-gray-700 mb-2">User Prompt (Editable)</label>
+                  <textarea
+                    className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[80px] resize-y text-sm"
+                    placeholder="Enter or modify the AI prompt..."
+                    rows={4}
+                    value={aiPrompt}
+                    onChange={(e) => setAiPrompt(e.target.value)}
+                  />
 
                   <div className="flex justify-end gap-3 mt-6">
                     <button
@@ -1320,15 +1392,15 @@ export default function Home() {
       {isSubprocessModalOpen && (
         <div className="fixed inset-0 flex items-center justify-center z-50">
           <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setIsSubprocessModalOpen(false)} />
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md z-50 overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[75vh] z-50 overflow-hidden flex flex-col">
             <div className="border-b border-gray-100 px-6 py-3 bg-gray-50 flex items-center gap-3">
               <FiEdit3 className="w-5 h-5 text-blue-600" />
               <h2 className="text-lg font-bold text-gray-900">Add subprocess</h2>
             </div>
 
-            <div className="p-6">
+            <div className="p-4 flex-1 overflow-y-auto">
               {/* Subtle Mode Toggle - Tab Style */}
-              <div className="inline-flex gap-1 mb-6 p-1 bg-gray-100 rounded-lg">
+              <div className="inline-flex gap-1 mb-4 p-1 bg-gray-100 rounded-lg">
                 <button
                   className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
                     subprocessMode === 'manual'
@@ -1400,6 +1472,23 @@ export default function Home() {
                   <p className="text-sm text-gray-600 mb-4">
                     AI will generate subprocesses based on the parent process name and description.
                   </p>
+
+                  <label className="block text-sm font-medium text-gray-700 mb-2">System Prompt (Read-only)</label>
+                  <textarea
+                    className="w-full bg-gray-100 border border-gray-200 rounded-xl px-4 py-3 text-gray-600 min-h-[80px] resize-y text-sm"
+                    rows={4}
+                    value={SYSTEM_PROMPT}
+                    readOnly
+                  />
+
+                  <label className="block text-sm font-medium text-gray-700 mb-2">User Prompt (Editable)</label>
+                  <textarea
+                    className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[80px] resize-y text-sm"
+                    placeholder="Enter or modify the AI prompt..."
+                    rows={4}
+                    value={aiSubprocessPrompt}
+                    onChange={(e) => setAiSubprocessPrompt(e.target.value)}
+                  />
 
                   <div className="flex justify-end gap-3 mt-6">
                     <button
