@@ -4,7 +4,9 @@ import { Toaster, toast } from 'react-hot-toast'
 
 
 import { useCapabilityApi } from '../hooks/useCapability';
-import type { Capability, Process, Domain } from '../hooks/useCapability';
+import type {
+  Capability, Process, Prompt, Domain,
+} from '../hooks/useCapability';
 import favicon from '../assets/favicon.png';
 
 
@@ -32,6 +34,9 @@ export default function Home() {
     deleteProcess,
     deleteCapability,
     generateProcesses,
+    listPrompts,
+    updatePrompt,
+    seedPrompts,
   } = useCapabilityApi();
 
   const [newDomainName, setNewDomainName] = useState('');
@@ -63,7 +68,7 @@ export default function Home() {
       try {
         const doms = await listDomains();
         setDomains(doms);
-        
+
         const caps = await listCapabilities();
 
         const first = caps && caps.length > 0 ? (caps[0] as any) : null;
@@ -126,7 +131,7 @@ export default function Home() {
           name: formName,
           description: formDescription,
         });
-        
+
         const domainName =
           (newCap as any).domain || domains.find((d) => String(d.id) === String(selectedDomain))?.name || selectedDomain;
         setCapabilities((s) => [
@@ -216,7 +221,7 @@ export default function Home() {
   // Generated processes preview modal (LLM responses) - user must approve which to save
   const [generatedPreview, setGeneratedPreview] = useState<any[]>([]);
   const [isGeneratedModalOpen, setIsGeneratedModalOpen] = useState(false);
-  
+
   // Subprocess modal state
   const [isSubprocessModalOpen, setIsSubprocessModalOpen] = useState(false);
   const [subprocessParentProcessId, setSubprocessParentProcessId] = useState<number | null>(null);
@@ -226,14 +231,20 @@ export default function Home() {
   const [isSavingSubprocess, setIsSavingSubprocess] = useState(false);
   const [subprocessMode, setSubprocessMode] = useState<'manual' | 'ai'>('ai');
   const [isGeneratingSubprocess, setIsGeneratingSubprocess] = useState(false);
-  
+
   const [selectedGeneratedIdxs, setSelectedGeneratedIdxs] = useState<Set<string>>(new Set());
   const [isSavingGenerated, setIsSavingGenerated] = useState(false);
+
 
   // CSV export modal state
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [selectedExportCapId, setSelectedExportCapId] = useState<number | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+
+  // Prompt Management State
+  const [selectedPromptId, setSelectedPromptId] = useState<number | null>(null);
+  const [promptFormText, setPromptFormText] = useState('');
+  const [currentSystemPrompt, setCurrentSystemPrompt] = useState('');
 
   const processLevelOptions = [
     'enterprise',
@@ -255,7 +266,7 @@ export default function Home() {
     setSubprocessParentCapId(parentCapId);
     setManualSubprocessName('');
     setManualSubprocessDescription('');
-    setSubprocessMode('ai');
+    setSubprocessMode('manual');
     setIsSubprocessModalOpen(true);
   }
 
@@ -300,13 +311,13 @@ export default function Home() {
         s.map((c) =>
           c.id === subprocessParentCapId
             ? {
-                ...c,
-                processes: c.processes.map((p: any) =>
-                  p.id === subprocessParentProcessId
-                    ? { ...p, subprocesses: [...(p.subprocesses || []), newSubprocess] }
-                    : p
-                ),
-              }
+              ...c,
+              processes: c.processes.map((p: any) =>
+                p.id === subprocessParentProcessId
+                  ? { ...p, subprocesses: [...(p.subprocesses || []), newSubprocess] }
+                  : p
+              ),
+            }
             : c
         )
       );
@@ -326,22 +337,25 @@ export default function Home() {
     if (subprocessParentProcessId == null || subprocessParentCapId == null) return;
     try {
       setIsGeneratingSubprocess(true);
-      
+
       const parentCapability = capabilities.find((c) => c.id === subprocessParentCapId);
       const parentProcess = parentCapability?.processes.find((p: any) => p.id === subprocessParentProcessId);
-      
-      if (!parentCapability || !parentProcess) {
-        toast.error('Parent capability or process not found');
-        return;
+
+      // Save any prompt edits before generating
+      try {
+        await saveCurrentPrompt();
+      } catch (err) {
+        console.error("Failed to save prompt before generation", err);
+        toast.error('Failed to save prompt changes, using previous version');
       }
 
-      const result = await generateProcesses(parentProcess.name, subprocessParentCapId, parentCapability.domain || '', 'subprocess', parentProcess.description || '');
+      const result = await generateProcesses(parentProcess.name, subprocessParentCapId, parentCapability.domain || '', 'subprocess', parentProcess.description || '', currentSystemPrompt);
 
       if (result.status === 'success') {
         let subprocessesFromLLM: any[] = [];
-        
+
         console.log('[DEBUG] LLM Response for subprocesses:', result);
-        
+
         if (result.data?.processes && Array.isArray(result.data.processes)) {
           subprocessesFromLLM = result.data.processes;
           console.log('[DEBUG] Using result.data.processes');
@@ -383,24 +397,32 @@ export default function Home() {
     if (processCapId == null) return;
     try {
       setIsGenerating(true);
-      
+
       const parentCapability = capabilities.find((c) => c.id === processCapId);
       if (!parentCapability) {
         toast.error('Capability not found');
         return;
       }
 
-      const result = await generateProcesses(parentCapability.name, processCapId, parentCapability.domain || '', processLevel, parentCapability.description || '');
+      // Save any prompt edits before generating
+      try {
+        await saveCurrentPrompt();
+      } catch (err) {
+        console.error("Failed to save prompt before generation", err);
+        toast.error('Failed to save prompt changes, using previous version');
+      }
+
+      const result = await generateProcesses(parentCapability.name, processCapId, parentCapability.domain || '', processLevel, parentCapability.description || '', currentSystemPrompt);
 
       if (result.status === 'success') {
         const created = result.processes || [];
-        
+
         // Handle the new response structure: result.data is the LLM JSON with 'processes' array
         let processesFromLLM: any[] = [];
-        
+
         console.log('[DEBUG] LLM Response:', result);
         console.log('[DEBUG] result.data:', result.data);
-        
+
         if (result.data?.processes && Array.isArray(result.data.processes)) {
           processesFromLLM = result.data.processes;
           console.log('[DEBUG] Using result.data.processes');
@@ -424,7 +446,7 @@ export default function Home() {
         console.log('[DEBUG] processesFromLLM:', processesFromLLM);
         console.log('[DEBUG] preferSource length:', preferSource.length);
 
-        
+
         const normalized = (Array.isArray(preferSource) ? preferSource : []).map((proc: any, idx: number) => ({
           tempId: idx,
           name: proc.name,
@@ -433,12 +455,12 @@ export default function Home() {
           level: proc.level || processLevel || 'core',
           subprocesses: Array.isArray(proc.subprocesses)
             ? proc.subprocesses.map((sub: any, subIdx: number) => ({
-                id: sub.id ?? `${idx + 10000}-${subIdx}`,
-                name: sub.name,
-                description: sub.description,
-                category: sub.category || '',
-                lifecycle_phase: sub.lifecycle_phase,
-              }))
+              id: sub.id ?? `${idx + 10000}-${subIdx}`,
+              name: sub.name,
+              description: sub.description,
+              category: sub.category || '',
+              lifecycle_phase: sub.lifecycle_phase,
+            }))
             : [],
         }));
 
@@ -463,21 +485,21 @@ export default function Home() {
     const ok = window.confirm('Are you sure you want to delete this process? This cannot be undone.');
     if (!ok) return;
     try {
-      
+
       if (typeof processId === 'number') {
         await deleteProcess(processId);
       }
 
-      
+
       setCapabilities((prev) =>
         prev.map((c) => {
           if (c.id !== capId) return c;
           const processes = (c.processes || []).map((p: any) => ({ ...p }));
           if (parentProcessId == null) {
-            
+
             return { ...c, processes: processes.filter((p: any) => String(p.id) !== String(processId)) };
           }
-          
+
           return {
             ...c,
             processes: processes.map((p: any) => {
@@ -509,17 +531,17 @@ export default function Home() {
     }
   }
 
-   
+
   async function saveSelectedGeneratedProcesses() {
     // Check if we're saving subprocesses or processes
     const isSavingSubprocesses = subprocessParentProcessId != null;
-    
+
     if (isSavingSubprocesses) {
       if (subprocessParentCapId == null) return;
     } else {
       if (processCapId == null) return;
     }
-    
+
     if (!Array.isArray(generatedPreview) || generatedPreview.length === 0) return;
     if (selectedGeneratedIdxs.size === 0) {
       toast('No items selected to save');
@@ -529,22 +551,22 @@ export default function Home() {
     try {
       setIsSavingGenerated(true);
       const createdProcs: any[] = [];
-      
+
       for (let procIdx = 0; procIdx < generatedPreview.length; procIdx++) {
         const procKey = `proc-${procIdx}`;
         const isItemSelected = selectedGeneratedIdxs.has(procKey);
-        
-        if (!isItemSelected) continue; 
-        
+
+        if (!isItemSelected) continue;
+
         const p = generatedPreview[procIdx];
         if (!p) continue;
-        
+
         try {
           const selectedSubs: any[] = [];
           if (Array.isArray(p.subprocesses)) {
             for (let subIdx = 0; subIdx < p.subprocesses.length; subIdx++) {
               const subKey = `proc-${procIdx}-sub-${subIdx}`;
-                if (selectedGeneratedIdxs.has(subKey)) {
+              if (selectedGeneratedIdxs.has(subKey)) {
                 const sub = p.subprocesses[subIdx];
                 selectedSubs.push({ name: sub.name, description: sub.description || '', category: sub.category || undefined });
               }
@@ -597,13 +619,13 @@ export default function Home() {
             prev.map((c) =>
               c.id === subprocessParentCapId
                 ? {
-                    ...c,
-                    processes: c.processes.map((proc: any) =>
-                      proc.id === subprocessParentProcessId
-                        ? { ...proc, subprocesses: [...(proc.subprocesses || []), ...createdProcs] }
-                        : proc
-                    ),
-                  }
+                  ...c,
+                  processes: c.processes.map((proc: any) =>
+                    proc.id === subprocessParentProcessId
+                      ? { ...proc, subprocesses: [...(proc.subprocesses || []), ...createdProcs] }
+                      : proc
+                  ),
+                }
                 : c
             )
           );
@@ -649,6 +671,64 @@ export default function Home() {
     });
   }
 
+  // Prompt Management Functions
+  const [loadingPrompt, setLoadingPrompt] = useState(false);
+
+  // Load the system prompt when AI mode is active and processLevel changes
+  useEffect(() => {
+    const isAiMode = (isProcessModalOpen && processMode === 'ai') || (isSubprocessModalOpen && subprocessMode === 'ai');
+    if (isAiMode) {
+      loadSystemPrompt();
+    }
+  }, [isProcessModalOpen, processMode, isSubprocessModalOpen, subprocessMode, processLevel]);
+
+  async function loadSystemPrompt() {
+    try {
+      setLoadingPrompt(true);
+      // Ensure seeded
+      await seedPrompts();
+      const allPrompts = await listPrompts();
+
+      // Determine needed level
+      let neededLevel = processLevel;
+      if (isSubprocessModalOpen && subprocessMode === 'ai') {
+        neededLevel = 'subprocess';
+      }
+
+      // Filter
+      const systemPrompt = allPrompts.find(p => p.process_level === neededLevel);
+
+      if (systemPrompt) {
+        setSelectedPromptId(systemPrompt.id);
+        setPromptFormText(systemPrompt.prompt);
+        setCurrentSystemPrompt(systemPrompt.prompt);
+      } else {
+        setPromptFormText('');
+        setCurrentSystemPrompt('');
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error('Failed to load system prompt');
+    } finally {
+      setLoadingPrompt(false);
+    }
+  }
+
+  async function saveCurrentPrompt() {
+    if (selectedPromptId == null) return;
+    try {
+      await updatePrompt(selectedPromptId, {
+        prompt: promptFormText
+      });
+      setCurrentSystemPrompt(promptFormText);
+      toast.success('Prompt saved');
+    } catch (e) {
+      console.error("Failed to save prompt", e);
+      toast.error('Failed to save prompt');
+      throw e;
+    }
+  }
+
 
   const parentCap = capabilities.find((c) => c.id === processCapId);
   const selectedDomainName = domains.find((d) => String(d.id) === selectedDomain)?.name;
@@ -668,32 +748,32 @@ export default function Home() {
         }}
       />
       <header className="border-b sticky top-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50">
-          <div className="container px-6 py-4">
-              <div className="flex items-center gap-3">
-                <img src={favicon} width={40} height={40} alt="favicon" />
-                <div>
-                    <h1 className="text-xl font-semibold">Capability Master™</h1>
-                    <p className="text-xs text-muted-foreground">
-                      Manage your enterprise capabilities and their associated processes.
-                    </p>
-                </div>
-              </div>
+        <div className="container px-6 py-4">
+          <div className="flex items-center gap-3">
+            <img src={favicon} width={40} height={40} alt="favicon" />
+            <div>
+              <h1 className="text-xl font-semibold">Capability Master™</h1>
+              <p className="text-xs text-muted-foreground">
+                Manage your enterprise capabilities and their associated processes.
+              </p>
+            </div>
           </div>
+        </div>
       </header>
 
       <div className="mx-auto mt-6 bg-white p-6 px-8 rounded-lg shadow-sm max-w-6xl">
         <div className="flex items-center gap-3 mb-6">
           <FiLayers className="w-8 h-8" />
           <h1 className="text-2xl font-semibold text-gray-900">Sub-Vertical</h1>
-          <div className="ml-auto">
-                  <button
-                    className="px-4 py-2 rounded-md text-sm font-medium transition-colors bg-gray-100 border border-primary text-indigo-600 hover:bg-indigo-700 hover:text-white"
-                    onClick={() => setIsExportModalOpen(true)}
-                    title="Export as CSV"
-                  >
-                    Export as CSV
-                  </button>
-                </div>
+          <div className="ml-auto flex items-center gap-3">
+            <button
+              className="px-4 py-2 rounded-md text-sm font-medium transition-colors bg-gray-100 border border-primary text-indigo-600 hover:bg-indigo-700 hover:text-white"
+              onClick={() => setIsExportModalOpen(true)}
+              title="Export as CSV"
+            >
+              Export as CSV
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-4 mb-6">
@@ -957,22 +1037,22 @@ export default function Home() {
 
             <div className="p-6">
               <label className="block text-sm font-medium text-gray-700 mb-2">Name</label>
-                <input
-                  className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              <input
+                className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                 placeholder="Enter sub-vertical name..."
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value)}
-                  disabled={modalMode === 'view'}
-                />
-               <label className="block text-sm font-medium text-gray-700 mb-2 mt-4">Description</label>
-                <textarea
-                  className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[100px] resize-y"
+                value={formName}
+                onChange={(e) => setFormName(e.target.value)}
+                disabled={modalMode === 'view'}
+              />
+              <label className="block text-sm font-medium text-gray-700 mb-2 mt-4">Description</label>
+              <textarea
+                className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[100px] resize-y"
                 placeholder="Enter sub-vertical description..."
-                  rows={4}
-                  value={formDescription}
-                  onChange={(e) => setFormDescription(e.target.value)}
-                  disabled={modalMode === 'view'}
-                />
+                rows={4}
+                value={formDescription}
+                onChange={(e) => setFormDescription(e.target.value)}
+                disabled={modalMode === 'view'}
+              />
               <div className="flex justify-end gap-3 mt-6">
                 <button
                   className="px-3 py-1.5 rounded-md text-gray-600 hover:bg-gray-100 font-medium"
@@ -982,18 +1062,18 @@ export default function Home() {
                     setFormDescription('')
                   }}
                 >
-                Cancel
-              </button>
-              {modalMode !== 'view' && (
-                <button
-                  className="px-4 py-1.5 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                  onClick={saveCapability}
-                  disabled={!formName.trim()}
-                >
-                  <FiPlus className="w-4 h-4" />
-                    {modalMode === 'edit' ? 'Save changes' : 'Add sub-vertical'}
+                  Cancel
                 </button>
-              )}
+                {modalMode !== 'view' && (
+                  <button
+                    className="px-4 py-1.5 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    onClick={saveCapability}
+                    disabled={!formName.trim()}
+                  >
+                    <FiPlus className="w-4 h-4" />
+                    {modalMode === 'edit' ? 'Save changes' : 'Add sub-vertical'}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1014,21 +1094,19 @@ export default function Home() {
               {/* Subtle Mode Toggle - Tab Style */}
               <div className="inline-flex gap-1 mb-6 p-1 bg-gray-100 rounded-lg">
                 <button
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                    processMode === 'manual'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${processMode === 'manual'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                    }`}
                   onClick={() => setProcessMode('manual')}
                 >
                   Add Manually
                 </button>
                 <button
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                    processMode === 'ai'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${processMode === 'ai'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                    }`}
                   onClick={() => setProcessMode('ai')}
                 >
                   Generate with AI
@@ -1090,6 +1168,25 @@ export default function Home() {
               {/* AI Generation Mode */}
               {processMode === 'ai' && (
                 <>
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">System Prompt</label>
+                    <div className="relative">
+                      {loadingPrompt && <div className="absolute inset-0 bg-white/50 z-10 flex items-center justify-center"><span className="text-xs text-indigo-600">Loading...</span></div>}
+                      <textarea
+                        className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 font-mono text-xs placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[150px] resize-y"
+                        value={promptFormText}
+                        onChange={(e) => {
+                          setPromptFormText(e.target.value);
+                          setCurrentSystemPrompt(e.target.value);
+                        }}
+                        placeholder="Loading prompt..."
+                      />
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Variables: <code>{`{domain}`}</code>, <code>{`{capability_name}`}</code>, <code>{`{capability_description}`}</code>, <code>{`{process_type}`}</code>
+                    </p>
+                  </div>
+
                   <label className="block text-sm font-medium text-gray-700 mb-2">Process Level</label>
                   <select
                     className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 mb-4"
@@ -1181,7 +1278,7 @@ export default function Home() {
                         });
                       }
                     });
-                    
+
                     if (selectedGeneratedIdxs.size === allKeys.size) {
                       setSelectedGeneratedIdxs(new Set());
                     } else {
@@ -1202,7 +1299,7 @@ export default function Home() {
                   {generatedPreview.map((proc: any, idx: number) => {
                     const procKey = `proc-${idx}`;
                     const procChecked = selectedGeneratedIdxs.has(procKey);
-                    
+
                     return (
                       <li key={idx} className="border rounded-lg p-4 bg-gray-50">
                         <div className="flex items-start gap-3">
@@ -1243,7 +1340,7 @@ export default function Home() {
                               </div>
                             </div>
                             {proc.description && <div className="mt-1 text-sm text-gray-600">{proc.description}</div>}
-                            
+
                             {/* Subprocesses with individual checkboxes */}
                             {Array.isArray(proc.subprocesses) && proc.subprocesses.length > 0 && (
                               <div className="mt-3 ml-6 space-y-2 border-l-2 border-gray-300 pl-4">
@@ -1330,21 +1427,19 @@ export default function Home() {
               {/* Subtle Mode Toggle - Tab Style */}
               <div className="inline-flex gap-1 mb-6 p-1 bg-gray-100 rounded-lg">
                 <button
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                    subprocessMode === 'manual'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${subprocessMode === 'manual'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                    }`}
                   onClick={() => setSubprocessMode('manual')}
                 >
                   Add Manually
                 </button>
                 <button
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                    subprocessMode === 'ai'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${subprocessMode === 'ai'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                    }`}
                   onClick={() => setSubprocessMode('ai')}
                 >
                   Generate with AI
@@ -1397,6 +1492,25 @@ export default function Home() {
               {/* AI Generation Mode */}
               {subprocessMode === 'ai' && (
                 <>
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">System Prompt</label>
+                    <div className="relative">
+                      {loadingPrompt && <div className="absolute inset-0 bg-white/50 z-10 flex items-center justify-center"><span className="text-xs text-indigo-600">Loading...</span></div>}
+                      <textarea
+                        className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 font-mono text-xs placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[150px] resize-y"
+                        value={promptFormText}
+                        onChange={(e) => {
+                          setPromptFormText(e.target.value);
+                          setCurrentSystemPrompt(e.target.value);
+                        }}
+                        placeholder="Loading prompt..."
+                      />
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Variables: <code>{`{domain}`}</code>, <code>{`{capability_name}`}</code>, <code>{`{capability_description}`}</code>, <code>{`{process_type}`}</code>
+                    </p>
+                  </div>
+
                   <p className="text-sm text-gray-600 mb-4">
                     AI will generate subprocesses based on the parent process name and description.
                   </p>
@@ -1424,6 +1538,7 @@ export default function Home() {
           </div>
         </div>
       )}
+
     </div>
   )
 }
