@@ -112,16 +112,17 @@ class AzureOpenAIClient:
             description: str,
             domain: str,
             process_type: str,
+            system_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate processes for a capability in a specific domain with a given process type using Azure OpenAI LLM"""
         prompt_text = f"Generate {process_type}-level processes for the capability '{capability_name}' (Description: {description}) in the {domain} domain. Return ONLY valid JSON with a 'processes' array containing process objects with 'name', 'category', and 'description' fields."
         return await self.generate_json(prompt_text=prompt_text, purpose="processes", capability_name=capability_name,
-                                        domain=domain, process_type=process_type, capability_description=description)
+                                        domain=domain, process_type=process_type, capability_description=description, system_prompt=system_prompt)
 
     async def generate_json(self, *, prompt_text: str, purpose: str = "general",
                             context_sections: Optional[List[str]] = None, capability_name: Optional[str] = None,
                             domain: Optional[str] = None, process_type: Optional[str] = None, 
-                            capability_description: Optional[str] = None) -> Dict[str, Any]:
+                            capability_description: Optional[str] = None, system_prompt: Optional[str] = None) -> Dict[str, Any]:
         """Unified generator that requests strict JSON and parses robustly using Azure OpenAI.
 
         - prompt_text: final user-level prompt describing what to generate
@@ -133,12 +134,11 @@ class AzureOpenAIClient:
         - capability_description: optional capability description for LLM context
         """
         try:
-            # Import settings manager here to avoid circular imports
+
             from config.llm_settings import llm_settings_manager
             settings = await llm_settings_manager.get_all_settings()
 
-            # Use vault URL from user-configured settings so secret retrieval
-            # fails when the vault is misconfigured (preventing generation)
+
             vault_url = settings.get("vaultName")
             if vault_url:
                     self.key_vault_url = vault_url
@@ -214,40 +214,64 @@ class AzureOpenAIClient:
 }
 , indent=2)
 
-            system_prompt = (
-                f"You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in classifying business capabilities."
-                f"\n\n## Task:\n"
-                f"Generate a **comprehensive list of high-level Business Capabilities (Processes)** for the sub-vertical **'{capability_name}'** within the **{domain}** domain. The processes must be categorized by their **Process Type** (Core or Support)."
-                f"\n\n## Input Variables:\n"
-                f"- **domain**: {domain}\n"
-                f"- **subvertical_name**: {capability_name},{capability_description}\n"
-                f"- **process_type_filter**: {process_type} (Filter: Only generate processes matching this type: 'Core' or 'Support')"
-                f"\n\n## Requirements:\n"
-                f"- The list must be **comprehensive**, capturing all relevant, high-level capabilities in the specified sub-vertical and matching the `{process_type}` filter. **Do not impose a limit on the number of processes.**"
-                f"- Each capability must have a **Name** (Business Process), a **Category** (Front/Middle/Back Office), a **Type** (Core/Support), and a detailed **Description** (Activities and Description)."
-                f"- The **Category** must be one of: **'Front Office'**, **'Middle Office'**, or **'Back Office'**."
-                f"- The **Type** must strictly match the `{process_type}` provided ('Core' or 'Support')."
-                f"- Do not invent processes; base them strictly on standard industry practices for Enterprise Architecture in the specified domain and sub-vertical."
-                f"- If the domain/sub-vertical combination is not recognized or has no relevant processes for the specified type, return: {{'error': 'No relevant {process_type} capabilities found for {capability_name} in {domain}'}}\n"
-                f"\n\n## Output Format:\n"
-                f"Return the data as a valid JSON object matching the schema below. The output must be an array of process objects."
-                f"\n\n### JSON Schema:\n"
-                f"""
-                                    {{
-                                      "processes": [
-                                        {{
-                                          "name": "string (e.g., Client Onboarding & KYC)",
-                                          "category": "string (Front Office | Middle Office | Back Office)",
-                                          "process_type": "string (Core | Support)",
-                                          "description": "string (Detailed description of activities)"
-                                        }},
-                                        // ... additional process objects
-                                      ]
-                                    }}
-                                    """
-            )
 
-            # Generate content using Azure OpenAI
+            system_prompt = system_prompt or ""
+            if not system_prompt:
+                try:
+                    from database.repositories import prompt_repository
+                    from database.models import ProcessLevel
+
+                    level_map = {
+                        'enterprise': ProcessLevel.ENTERPRISE,
+                        'core': ProcessLevel.CORE,
+                        'process': ProcessLevel.PROCESS,
+
+                    }
+                    level = level_map.get(process_type, ProcessLevel.CORE)
+                    prompt_template = await prompt_repository.get_prompt_template_by_process_level(level)
+                    
+                    if prompt_template:
+                        system_prompt = prompt_template.prompt
+                        logger.info(f"Using system prompt from DB for level {level}")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch system prompt from DB: {e}. Using fallback.")
+
+            if not system_prompt:
+
+                system_prompt = (
+                    f"You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in classifying business capabilities."
+                    f"\n\n## Task:\n"
+                    f"Generate a **comprehensive list of high-level Business Capabilities (Processes)** for the sub-vertical **'{capability_name}'** within the **{domain}** domain. The processes must be categorized by their **Process Type** (Core or Support)."
+                    f"\n\n## Input Variables:\n"
+                    f"- **domain**: {domain}\n"
+                    f"- **subvertical_name**: {capability_name},{capability_description}\n"
+                    f"- **process_type_filter**: {process_type} (Filter: Only generate processes matching this type: 'Core' or 'Support')"
+                    f"\n\n## Requirements:\n"
+                    f"- The list must be **comprehensive**, capturing all relevant, high-level capabilities in the specified sub-vertical and matching the `{process_type}` filter. **Do not impose a limit on the number of processes.**"
+                    f"- Each capability must have a **Name** (Business Process), a **Category** (Front/Middle/Back Office), a **Type** (Core/Support), and a detailed **Description** (Activities and Description)."
+                    f"- The **Category** must be one of: **'Front Office'**, **'Middle Office'**, or **'Back Office'**."
+                    f"- The **Type** must strictly match the `{process_type}` provided ('Core' or 'Support')."
+                    f"- Do not invent processes; base them strictly on standard industry practices for Enterprise Architecture in the specified domain and sub-vertical."
+                    f"- If the domain/sub-vertical combination is not recognized or has no relevant processes for the specified type, return: {{'error': 'No relevant {process_type} capabilities found for {capability_name} in {domain}'}}\n"
+                    f"\n\n## Output Format:\n"
+                    f"Return the data as a valid JSON object matching the schema below. The output must be an array of process objects."
+                    f"\n\n### JSON Schema:\n"
+                    f"""
+                                        {{
+                                          "processes": [
+                                            {{
+                                              "name": "string (e.g., Client Onboarding & KYC)",
+                                              "category": "string (Front Office | Middle Office | Back Office)",
+                                              "process_type": "string (Core | Support)",
+                                              "description": "string (Detailed description of activities)"
+                                            }},
+                                            // ... additional process objects
+                                          ]
+                                        }}
+                                        """
+                )
+
+
             response = client.chat.completions.create(
                 model=config["model"],
                 messages=[
@@ -282,19 +306,19 @@ class AzureOpenAIClient:
                     s = html.unescape(s)
                 except Exception:
                     pass
-                # CRITICAL: Fix double-escaped quotes FIRST: ""key"" -> "key"
+
                 s = re.sub(r'""([^"]*?)""', r'"\1"', s)
-                # Normalize all types of quotes to double quotes
+
                 s = s.replace('\u201c', '"').replace('\u201d', '"')  # Smart double quotes
                 s = s.replace('\u2018', '"').replace('\u2019', '"')  # Smart single quotes
                 s = s.replace('\u201e', '"').replace('\u201f', '"')  # Double low-9 quotes
                 s = s.replace('\u2039', '"').replace('\u203a', '"')  # Guillemets
                 s = s.replace('«', '"').replace('»', '"')  # French quotes
-                # Remove control characters early
+
                 s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", s)
-                # Convert remaining single quotes to double quotes
+
                 s = s.replace("'", '"')
-                # Fix escaped quotes
+
                 s = s.replace('\\"', '"')
                 # Fix double double quotes (again, in case of complex patterns)
                 s = re.sub(r'""\s*([^"\n\r]+?)\s*""', r'"\1"', s)
