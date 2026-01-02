@@ -28,6 +28,7 @@ export default function Home() {
     updateCapability,
     listProcesses,
     createProcess,
+    createSubprocess,
     deleteProcess,
     deleteCapability,
     generateProcesses,
@@ -289,11 +290,10 @@ export default function Home() {
     if (!manualSubprocessName.trim() || subprocessParentProcessId == null || subprocessParentCapId == null) return;
     try {
       setIsSavingSubprocess(true);
-      const newSubprocess = await createProcess({
+      const newSubprocess = await createSubprocess({
         name: manualSubprocessName.trim(),
-        level: 'subprocess',
         description: manualSubprocessDescription.trim(),
-        capability_id: subprocessParentCapId,
+        category: undefined, // Can be extended later if needed
         parent_process_id: subprocessParentProcessId,
       });
       setCapabilities((s) =>
@@ -561,15 +561,30 @@ export default function Home() {
           };
 
           if (isSavingSubprocesses) {
-            createPayload.parent_process_id = subprocessParentProcessId;
+            // Use createSubprocess for subprocess creation
+            const subprocessPayload = {
+              name: p.name,
+              description: p.description || '',
+              category: p.category || undefined,
+              parent_process_id: subprocessParentProcessId,
+            };
+            const created = await createSubprocess(subprocessPayload);
+            createdProcs.push(created);
           } else {
+            // Use createProcess for process creation
+            const processPayload = {
+              name: p.name,
+              level: p.level,
+              description: p.description || '',
+              capability_id: capId,
+              category: p.category || undefined,
+            };
             if (selectedSubs.length > 0) {
-              createPayload.subprocesses = selectedSubs;
+              processPayload.subprocesses = selectedSubs;
             }
+            const created = await createProcess(processPayload);
+            createdProcs.push(created);
           }
-          
-          const created = await createProcess(createPayload);
-          createdProcs.push(created);
         } catch (err) {
           console.error('createProcess failed for generated item', err);
         }
