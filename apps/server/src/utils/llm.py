@@ -381,6 +381,7 @@ class AzureOpenAIClient:
                 model_name=config["model"],
                 domain=domain,
                 capability_name=capability_name,
+                user_prompt=prompt_text,
                 status="success"
             )
 
@@ -394,6 +395,7 @@ class AzureOpenAIClient:
                     model_name=config.get("model", "unknown") if 'config' in locals() else "unknown",
                     domain=domain,
                     capability_name=capability_name,
+                    user_prompt=prompt_text if 'prompt_text' in locals() else None,
                     status="failed"
                 )
             except Exception as log_err:

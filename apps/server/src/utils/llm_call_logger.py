@@ -62,6 +62,7 @@ class LLMCallLogger:
         model_name: str,
         domain: str = None,
         capability_name: str = None,
+        user_prompt: str = None,
         status: str = "success"
     ) -> int:
         """
@@ -71,8 +72,7 @@ class LLMCallLogger:
             model_name: Name of the deployment model used (e.g., 'gpt-4o')
             domain: Domain for which the LLM was called (optional)
             capability_name: Capability name for which the LLM was called (optional)
-            purpose: Purpose of the LLM call (e.g., 'processes', 'general') (optional)
-            process_type: Type of process (e.g., 'Core', 'Support') (optional)
+            user_prompt: The user prompt text sent to the LLM (optional)
             status: Status of the call (default: 'success')
         
         Returns:
@@ -93,6 +93,7 @@ class LLMCallLogger:
                 f"Model:{model_name} | "
                 f"Domain:{domain or 'N/A'} | "
                 f"SubVertical:{capability_name or 'N/A'} | "
+                f"UserPrompt:{user_prompt or 'N/A'} | "
                 f"Status:{status}\n"
             )
             

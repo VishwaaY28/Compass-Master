@@ -194,6 +194,9 @@ async def create_domain(payload: DomainCreateRequest):
 
 @router.get("/domains", response_model=List[Domain_Pydantic])
 async def list_domains():
+    # Seed default domains if none exist
+    await domain_repository.seed_default_domains()
+    
     domains = await domain_repository.fetch_all_domains()
     return await Domain_Pydantic.from_queryset(DomainModel.all())
 

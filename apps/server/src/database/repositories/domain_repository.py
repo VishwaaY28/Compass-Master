@@ -29,3 +29,20 @@ async def delete_domain(domain_id: int):
     """Delete a domain"""
     deleted_count = await Domain.filter(id=domain_id).delete()
     return deleted_count > 0
+
+
+async def seed_default_domains():
+    """Seed default domains if none exist"""
+    existing = await fetch_all_domains()
+    if existing:
+        return  # Already seeded
+
+    default_domains = [
+        "Capital Markets",
+        "International Financial Institution (IFI)",
+        "US Federal Government",
+        "Banking"
+    ]
+
+    for domain_name in default_domains:
+        await Domain.create(name=domain_name)
