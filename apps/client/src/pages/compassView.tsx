@@ -12,6 +12,8 @@ export default function CompassView() {
   const [isDescriptionModalOpen, setIsDescriptionModalOpen] = useState(false);
   const [modalDescription, setModalDescription] = useState('');
   const [modalTitle, setModalTitle] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 20;
   const loadedRef = useRef(false);
 
   const { listDomains, listCapabilities, listProcesses } = useCapabilityApi();
@@ -93,6 +95,11 @@ export default function CompassView() {
     load();
   }, [listCapabilities, listProcesses]);
 
+  // Reset to first page when capabilities change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [capabilities]);
+
   // Flatten the data for table display
   const flattenedData: any[] = [];
   capabilities.forEach((cap) => {
@@ -143,6 +150,12 @@ export default function CompassView() {
       });
     }
   });
+
+  // Calculate pagination values
+  const totalPages = Math.ceil(flattenedData.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedData = flattenedData.slice(startIndex, endIndex);
 
   const handleDownloadCSV = async () => {
     try {
@@ -262,23 +275,24 @@ export default function CompassView() {
             <p className="text-gray-500">No capabilities found.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="bg-gray-100 border-b-2 border-gray-300">
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Domain</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Capability Name</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Capability Description</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Process Name</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Process Level</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Process Category</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Process Description</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Subprocess Name</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Subprocess Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {flattenedData.map((row, idx) => {
+          <div>
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="bg-gray-100 border-b-2 border-gray-300">
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Domain</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Capability Name</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Capability Description</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Process Name</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Process Level</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Process Category</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Process Description</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Subprocess Name</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Subprocess Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedData.map((row, idx) => {
                   const capDescTruncated = truncateAtWordBoundary(row.capabilityDescription, 20);
                   const procDescTruncated = truncateAtWordBoundary(row.processDescription, 20);
                   const subprocDescTruncated = truncateAtWordBoundary(row.subprocessDescription, 20);
@@ -349,7 +363,49 @@ export default function CompassView() {
               </tbody>
             </table>
           </div>
-        )}
+
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="mt-6 flex items-center justify-center gap-2">
+              <button
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-2 rounded-md text-sm font-medium bg-gray-200 text-gray-900 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Previous
+              </button>
+
+              <div className="flex items-center gap-1">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
+                  <button
+                    key={pageNum}
+                    onClick={() => setCurrentPage(pageNum)}
+                    className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                      currentPage === pageNum
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-gray-200 text-gray-900 hover:bg-gray-300'
+                    }`}
+                  >
+                    {pageNum}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-2 rounded-md text-sm font-medium bg-gray-200 text-gray-900 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Next
+              </button>
+
+              <span className="ml-4 text-sm text-gray-600">
+                Page {currentPage} of {totalPages} | Showing {startIndex + 1} to {Math.min(endIndex, flattenedData.length)} of {flattenedData.length} records
+              </span>
+            </div>
+          )}
+        </div>
+      )}
       </div>
 
       {/* Description Modal */}
