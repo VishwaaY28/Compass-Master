@@ -756,13 +756,13 @@ export default function Home() {
             {domains.length === 0 ? (
               <div className="flex items-center gap-2">
                 <input
-                  className="border rounded-md px-3 py-2 bg-white text-sm text-gray-700 focus:ring-2 focus:ring-indigo-200"
+                  className="border rounded-md px-3 py-2 bg-white text-sm text-gray-700 focus:ring-2 focus:ring-indigo-200 w-48"
                   placeholder="Enter domain name"
                   value={newDomainName}
                   onChange={(e) => setNewDomainName(e.target.value)}
                 />
                 <button
-                  className={`px-3 py-2 rounded-md text-sm font-medium ${newDomainName.trim() ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+                  className={`px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap ${newDomainName.trim() ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
                   disabled={!newDomainName.trim() || isSavingDomain}
                   onClick={handleCreateDomain}
                 >
@@ -771,7 +771,7 @@ export default function Home() {
               </div>
             ) : (
               <select
-                className="border rounded-md px-3 py-2 bg-white text-sm text-gray-700 focus:ring-2 focus:ring-indigo-200"
+                className="border rounded-md px-3 py-2 bg-white text-sm text-gray-700 focus:ring-2 focus:ring-indigo-200 w-48"
                 value={selectedDomain}
                 onChange={(e) => setSelectedDomain(e.target.value)}
               >
@@ -786,7 +786,7 @@ export default function Home() {
           </div>
 
           <button
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${selectedDomain ? 'bg-gray-100 border border-primary text-indigo-600 hover:bg-indigo-700 hover:text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${selectedDomain ? 'bg-gray-100 border border-primary text-indigo-600 hover:bg-indigo-700 hover:text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
             disabled={!selectedDomain}
             onClick={openAddModal}
           >
