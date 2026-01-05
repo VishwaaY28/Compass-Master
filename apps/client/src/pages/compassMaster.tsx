@@ -390,7 +390,12 @@ export default function Home() {
         return;
       }
 
-      const result = await generateProcesses(parentProcess.name, subprocessParentCapId, parentCapability.domain || '', 'subprocess', parentProcess.description || '', aiSubprocessPrompt);
+      const result = await generateProcesses(parentProcess.name, subprocessParentCapId, parentCapability.domain || '', 'subprocess', parentProcess.description || '', 
+        aiSubprocessPrompt
+          .replace('{process_name}', parentProcess.name)
+          .replace('{process_description}', parentProcess.description || '')
+          .replace('{domain}', parentCapability.domain || '')
+      );
 
       if (result.status === 'success') {
         let subprocessesFromLLM: any[] = [];
