@@ -7,6 +7,33 @@ import { useCapabilityApi } from '../hooks/useCapability';
 import type { Capability, Process, Domain } from '../hooks/useCapability';
 import favicon from '../assets/favicon.png';
 
+// Domain to Sub-Vertical mapping
+const DOMAIN_SUBVERTICAL_MAP: Record<string, string[]> = {
+  'Capital Markets': [
+    'Investment banking',
+    'Wealth management',
+    'Asset management',
+    'Private equity',
+    'Market infrastructure',
+    'Asset services, Custodians',
+    'Others',
+  ],
+  'International Financial Institution (IFI)': [
+    'Multilateral Development Bank (MDB)',
+    'Development Finance Institution',
+    'Nondepository Credit Intermediation',
+  ],
+  'US Federal Government': [
+    'Federal agencies',
+  ],
+  'Banking': [
+    'Retail banking',
+    'Investment banking',
+    'Corporate banking',
+    'Wealth management',
+  ],
+};
+
 const SYSTEM_PROMPT = `You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in classifying business capabilities.
 
 ## Task:
@@ -52,6 +79,8 @@ export default function Home() {
 
   const [formName, setFormName] = useState('');
   const [formDescription, setFormDescription] = useState('');
+  const [suggestedSubVerticals, setSuggestedSubVerticals] = useState<string[]>([]);
+  const [useCustomSubVertical, setUseCustomSubVertical] = useState(false);
 
   const {
     listDomains,
@@ -133,6 +162,17 @@ export default function Home() {
     setEditingId(null);
     setFormName('');
     setFormDescription('');
+    setUseCustomSubVertical(false);
+    
+    // Get suggested sub-verticals based on selected domain
+    const selectedDomainObj = domains.find((d) => String(d.id) === selectedDomain);
+    const domainName = selectedDomainObj?.name;
+    if (domainName && DOMAIN_SUBVERTICAL_MAP[domainName]) {
+      setSuggestedSubVerticals(DOMAIN_SUBVERTICAL_MAP[domainName]);
+    } else {
+      setSuggestedSubVerticals([]);
+    }
+    
     setIsModalOpen(true);
   }
 
@@ -1016,15 +1056,63 @@ export default function Home() {
             </div>
 
             <div className="p-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Name</label>
-                <input
-                  className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                placeholder="Enter sub-vertical name..."
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value)}
-                  disabled={modalMode === 'view'}
-                />
-               <label className="block text-sm font-medium text-gray-700 mb-2 mt-4">Description</label>
+              {/* Show sub-vertical dropdown in add mode */}
+              {modalMode === 'add' && suggestedSubVerticals.length > 0 && !useCustomSubVertical && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Select Sub-Vertical</label>
+                  <select
+                    className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    value={formName}
+                    onChange={(e) => {
+                      setFormName(e.target.value);
+                      setFormDescription('');
+                    }}
+                  >
+                    <option value="">-- Select a sub-vertical --</option>
+                    {suggestedSubVerticals.map((subVertical) => (
+                      <option key={subVertical} value={subVertical}>
+                        {subVertical}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setUseCustomSubVertical(true)}
+                    className="mt-2 text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+                  >
+                    Use custom name instead
+                  </button>
+                </div>
+              )}
+
+              {/* Show custom input when user chooses to use custom or in edit/view mode */}
+              {(modalMode !== 'add' || useCustomSubVertical) && (
+                <>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Name</label>
+                  <input
+                    className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    placeholder="Enter sub-vertical name..."
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                    disabled={modalMode === 'view'}
+                  />
+                </>
+              )}
+
+              {/* Back button to view suggestions again */}
+              {modalMode === 'add' && useCustomSubVertical && suggestedSubVerticals.length > 0 && (
+                <button
+                  onClick={() => {
+                    setUseCustomSubVertical(false);
+                    setFormName('');
+                    setFormDescription('');
+                  }}
+                  className="text-sm text-indigo-600 hover:text-indigo-700 font-medium mb-4"
+                >
+                  ← Back to suggestions
+                </button>
+              )}
+
+              <label className="block text-sm font-medium text-gray-700 mb-2 mt-4">Description</label>
                 <textarea
                   className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[100px] resize-y"
                 placeholder="Enter sub-vertical description..."
