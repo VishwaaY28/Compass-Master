@@ -49,3 +49,11 @@ class LLMSettings(TimestampMixin):
   
   class Meta:
     table = "llm_settings"
+
+class PromptTemplate(TimestampMixin):
+  id = fields.IntField(pk=True)
+  process_level = fields.CharField(max_length=50)
+  prompt = fields.TextField()
+  
+  class Meta:
+    table = "prompt_templates"

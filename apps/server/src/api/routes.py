@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from tortoise.contrib.pydantic import pydantic_model_creator
 
-from database.repositories import capability_repository, process_repository, domain_repository
+from database.repositories import capability_repository, process_repository, domain_repository, prompt_template_repository
 from database.models import Capability as CapabilityModel, Process as ProcessModel, Domain as DomainModel, SubProcess as SubProcessModel
 from utils.llm import azure_openai_client
 from utils.llm2 import gemini_client
@@ -170,6 +170,19 @@ async def set_llm_config(payload: LLMConfigRequest):
         "message": "LLM configuration updated successfully",
         **settings
     })
+
+
+@router.get("/settings/prompt-template/{process_level}")
+async def get_prompt_template(process_level: str):
+    """Get the prompt template for a given process level"""
+    # Seed if not exists
+    await prompt_template_repository.seed_default_prompts()
+    
+    prompt_obj = await prompt_template_repository.get_prompt_by_level(process_level)
+    if not prompt_obj:
+        raise HTTPException(status_code=404, detail=f"No prompt template found for level: {process_level}")
+    
+    return JSONResponse({"process_level": process_level, "prompt": prompt_obj.prompt})
 
 
 # CRUD for Domains
@@ -478,6 +491,7 @@ class GenerateProcessRequest(BaseModel):
     capability_description: Optional[str] = None
     domain: str
     process_type: str
+    prompt: str
 
 
 @router.post("/processes/generate")
@@ -503,7 +517,8 @@ async def generate_processes(payload: GenerateProcessRequest):
                 payload.capability_name, 
                 payload.capability_description or "", 
                 payload.domain, 
-                payload.process_type
+                payload.process_type,
+                payload.prompt
             )
             logger.info(f"LLM returned: {llm_result}")
             print(f"[DEBUG] LLM returned: {llm_result}")

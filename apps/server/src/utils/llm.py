@@ -112,9 +112,9 @@ class AzureOpenAIClient:
             description: str,
             domain: str,
             process_type: str,
+            prompt_text: str,
     ) -> Dict[str, Any]:
         """Generate processes for a capability in a specific domain with a given process type using Azure OpenAI LLM"""
-        prompt_text = f"Generate {process_type}-level processes for the capability '{capability_name}' (Description: {description}) in the {domain} domain. Return ONLY valid JSON with a 'processes' array containing process objects with 'name', 'category', and 'description' fields."
         return await self.generate_json(prompt_text=prompt_text, purpose="processes", capability_name=capability_name,
                                         domain=domain, process_type=process_type, capability_description=description)
 

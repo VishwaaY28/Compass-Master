@@ -140,7 +140,7 @@ export function useCapabilityApi() {
 		await fetcher(`${BASE_URL}/processes/${id}`, { method: 'DELETE' });
 	}, []);
 
-	const generateProcesses = useCallback(async (capabilityName: string, capabilityId: number, domain: string, processType: string, capabilityDescription: string = '') => {
+	const generateProcesses = useCallback(async (capabilityName: string, capabilityId: number, domain: string, processType: string, capabilityDescription: string = '', prompt: string) => {
 		const res = await fetcher<any>(`${BASE_URL}/processes/generate`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -150,9 +150,14 @@ export function useCapabilityApi() {
 				capability_description: capabilityDescription,
 				domain: domain,
 				process_type: processType,
+				prompt: prompt,
 			}),
 		});
 		return res;
+	}, []);
+
+	const getPromptTemplate = useCallback(async (processLevel: string) => {
+		return fetcher<{ process_level: string; prompt: string }>(`${BASE_URL}/settings/prompt-template/${processLevel}`);
 	}, []);
 
 	return {
@@ -170,6 +175,7 @@ export function useCapabilityApi() {
 		updateProcess,
 		deleteProcess,
 		generateProcesses,
+		getPromptTemplate,
 	};
 
 }
