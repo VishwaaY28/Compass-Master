@@ -213,43 +213,76 @@ class AzureOpenAIClient:
 }
 , indent=2)
 
-            system_prompt = (
-                f"You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in classifying business capabilities."
-                f"\n\n## Task:\n"
-                f"Generate a **comprehensive list of high-level Business Capabilities (Processes)** for the sub-vertical **'{capability_name}'** within the **{domain}** domain. The processes must be categorized by their **Process Type** (Core or Support)."
-                f"\n\n## Input Variables:\n"
-                f"- **domain**: {domain}\n"
-                f"- **subvertical_name**: {capability_name},{capability_description}\n"
-                f"- **process_type_filter**: {process_type} (Filter: Only generate processes matching this type: 'Core' or 'Support')"
-                f"\n\n## Requirements:\n"
-                f"- The list must be **comprehensive**, capturing all relevant, high-level capabilities in the specified sub-vertical and matching the `{process_type}` filter. **Do not impose a limit on the number of processes.**"
-                f"- Each capability must have a **Name** (Business Process), a **Category** (Front/Middle/Back Office), a **Type** (Core/Support), and a detailed **Description** (Activities and Description)."
-                f"- The **Category** must be one of: **'Front Office'**, **'Middle Office'**, or **'Back Office'**."
-                f"- The **Type** must strictly match the `{process_type}` provided ('Core' or 'Support')."
-                f"- Do not invent processes; base them strictly on standard industry practices for Enterprise Architecture in the specified domain and sub-vertical."
-                f"- If the domain/sub-vertical combination is not recognized or has no relevant processes for the specified type, return: {{'error': 'No relevant {process_type} capabilities found for {capability_name} in {domain}'}}\n"
-                f"\n\n## Output Format:\n"
-                f"Return the data as a valid JSON object matching the schema below. The output must be an array of process objects."
-                f"\n\n### JSON Schema:\n"
-                f"""
-                                    {{
-                                      "processes": [
+# Create conditional system prompt based on process_type
+            if process_type == 'subprocess':
+                system_prompt = (
+                    f"You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in breaking down business processes into detailed subprocesses."
+                    f"\n\n## Task:\n"
+                    f"Generate a **comprehensive list of detailed subprocesses** for the parent process **'{capability_name}'** (Description: {capability_description}) within the **{domain}** domain."
+                    f"\n\n## Input Variables:\n"
+                    f"- **domain**: {domain}\n"
+                    f"- **process_name**: {capability_name}\n"
+                    f"- **process_description**: {capability_description}\n"
+                    f"\n\n## Requirements:\n"
+                    f"- The list must be **comprehensive**, capturing all relevant, detailed subprocesses that make up the parent process. **Do not impose a limit on the number of subprocesses.**"
+                    f"- Each subprocess must have a **Name**, a **Category** (Front/Middle/Back Office), and a detailed **Description** of the specific activities."
+                    f"- The **Category** must be one of: **'Front Office'**, **'Middle Office'**, or **'Back Office'**."
+                    f"- Base subprocesses strictly on standard industry practices for the specified domain and process."
+                    f"- If the process cannot be broken down into meaningful subprocesses, return: {{'error': 'Unable to generate meaningful subprocesses for {capability_name} in {domain}'}}\n"
+                    f"\n\n## Output Format:\n"
+                    f"Return the data as a valid JSON object matching the schema below. The output must be an array of subprocess objects."
+                    f"\n\n### JSON Schema:\n"
+                    f"""
                                         {{
-                                          "name": "string (e.g., Market research & strategy development,
-• Deal origination & sourcing,
-• Investment screening & initial evaluation,
-• Due Diligence,
-• Financial Analysis & Deal Structuring,
-• Transaction Execution & Closing)",
-                                          "category": "string (Front Office | Middle Office | Back Office)",
-                                          "process_type": "string (Core | Support)",
-                                          "description": "string (description of activities)"
-                                        }},
-                                        // ... additional process objects
-                                      ]
-                                    }}
-                                    """
-            )
+                                          "subprocesses": [
+                                            {{
+                                              "name": "string (detailed subprocess name)",
+                                              "category": "string (Front Office | Middle Office | Back Office)",
+                                              "description": "string (detailed description of subprocess activities)"
+                                            }},
+                                            // ... additional subprocess objects
+                                          ]
+                                        }}
+                    """
+                )
+            else:
+                system_prompt = (
+                    f"You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in classifying business capabilities."
+                    f"\n\n## Task:\n"
+                    f"Generate a **comprehensive list of high-level Business Capabilities (Processes)** for the sub-vertical **'{capability_name}'** within the **{domain}** domain. The processes must be categorized by their **Process Type** (Core or Support)."
+                    f"\n\n## Input Variables:\n"
+                    f"- **domain**: {domain}\n"
+                    f"- **subvertical_name**: {capability_name},{capability_description}\n"
+                    f"- **process_type_filter**: {process_type} (Filter: Only generate processes matching this type: 'Core' or 'Support')"
+                    f"\n\n## Requirements:\n"
+                    f"- The list must be **comprehensive**, capturing all relevant, high-level capabilities in the specified sub-vertical and matching the `{process_type}` filter. **Do not impose a limit on the number of processes.**"
+                    f"- Each capability must have a **Name** (Business Process), a **Category** (Front/Middle/Back Office), a **Type** (Core/Support), and a detailed **Description** (Activities and Description)."
+                    f"- The **Category** must be one of: **'Front Office'**, **'Middle Office'**, or **'Back Office'**."
+                    f"- The **Type** must strictly match the `{process_type}` provided ('Core' or 'Support')."
+                    f"- Do not invent processes; base them strictly on standard industry practices for Enterprise Architecture in the specified domain and sub-vertical."
+                    f"- If the domain/sub-vertical combination is not recognized or has no relevant processes for the specified type, return: {{'error': 'No relevant {process_type} capabilities found for {capability_name} in {domain}'}}\n"
+                    f"\n\n## Output Format:\n"
+                    f"Return the data as a valid JSON object matching the schema below. The output must be an array of process objects."
+                    f"\n\n### JSON Schema:\n"
+                    f"""
+                                        {{
+                                          "processes": [
+                                            {{
+                                              "name": "string (e.g., Market research & strategy development,
+    • Deal origination & sourcing,
+    • Investment screening & initial evaluation,
+    • Due Diligence,
+    • Financial Analysis & Deal Structuring,
+    • Transaction Execution & Closing)",
+                                              "category": "string (Front Office | Middle Office | Back Office)",
+                                              "process_type": "string (Core | Support)",
+                                              "description": "string (description of activities)"
+                                            }},
+                                            // ... additional process objects
+                                          ]
+                                        }}
+                    """
+                )
 
             # Generate content using Azure OpenAI
             response = client.chat.completions.create(
