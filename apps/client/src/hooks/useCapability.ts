@@ -1,12 +1,22 @@
 import { useCallback } from 'react';
 
 
-export type Domain = {
+export type Vertical = {
 	id: number;
 	name: string;
 	created_at: string;
 	updated_at: string;
 };
+
+export type SubVertical = {
+	id: number;
+	name: string;
+	vertical_id: number;
+	created_at: string;
+	updated_at: string;
+};
+
+export type Domain = Vertical;
 
 export type Process = {
 	id: number | string;
@@ -15,12 +25,38 @@ export type Process = {
 	description: string;
 	category?: string;
 	lifecycle_phase?: string;
-	subprocesses?: Process[];
+	subprocesses?: SubProcess[];
+	application?: string;
+	api?: string;
+};
+
+export type SubProcess = {
+	subprocess_id: number;
+	subprocess_name: string;
+	subprocess_description?: string;
+	subprocess_category?: string;
+	subprocess_application?: string;
+	subprocess_api?: string;
+	data_entities?: DataEntity[];
+};
+
+export type DataEntity = {
+	data_entity_id: number;
+	data_entity_name: string;
+	data_entity_description?: string;
+	data_elements?: DataElement[];
+};
+
+export type DataElement = {
+	data_element_id: number;
+	data_element_name: string;
+	data_element_description?: string;
 };
 
 export type Capability = {
 	id: number;
-	domain: string;
+	vertical?: string;
+	subvertical: string;
 	name: string;
 	description: string;
 	processes: Process[];
@@ -40,6 +76,62 @@ async function fetcher<T>(url: string, options?: RequestInit): Promise<T> {
 
 export function useCapabilityApi() {
 
+	const listVerticals = useCallback(async () => {
+		return fetcher<Vertical[]>(`${BASE_URL}/verticals`);
+	}, []);
+
+	const createVertical = useCallback(async (data: Omit<Vertical, 'id' | 'created_at' | 'updated_at'>) => {
+		const res = await fetcher<Vertical>(`${BASE_URL}/verticals`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(data),
+		});
+		return res;
+	}, []);
+
+	const updateVertical = useCallback(async (id: number, data: Partial<Vertical>) => {
+		const res = await fetcher<Vertical>(`${BASE_URL}/verticals/${id}`, {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(data),
+		});
+		return res;
+	}, []);
+
+	const deleteVertical = useCallback(async (id: number) => {
+		await fetcher(`${BASE_URL}/verticals/${id}`, { method: 'DELETE' });
+	}, []);
+
+	const listSubVerticals = useCallback(async (verticalId?: number) => {
+		if (verticalId) {
+			return fetcher<SubVertical[]>(`${BASE_URL}/subverticals?vertical_id=${verticalId}`);
+		}
+		return fetcher<SubVertical[]>(`${BASE_URL}/subverticals`);
+	}, []);
+
+	const createSubVertical = useCallback(async (data: Omit<SubVertical, 'id' | 'created_at' | 'updated_at'>) => {
+		const res = await fetcher<SubVertical>(`${BASE_URL}/subverticals`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(data),
+		});
+		return res;
+	}, []);
+
+	const updateSubVertical = useCallback(async (id: number, data: Partial<SubVertical>) => {
+		const res = await fetcher<SubVertical>(`${BASE_URL}/subverticals/${id}`, {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(data),
+		});
+		return res;
+	}, []);
+
+	const deleteSubVertical = useCallback(async (id: number) => {
+		await fetcher(`${BASE_URL}/subverticals/${id}`, { method: 'DELETE' });
+	}, []);
+
+	// Legacy domain endpoints for backwards compatibility
 	const listDomains = useCallback(async () => {
 		return fetcher<Domain[]>(`${BASE_URL}/domains`);
 	}, []);
@@ -71,13 +163,13 @@ export function useCapabilityApi() {
 	}, []);
 
 	const createCapability = useCallback(async (data: Omit<Capability, 'id' | 'processes'>) => {
-		// Accept either `domain` or `domain_id` in the payload and normalize to `domain_id`
+		// Accept either `subvertical` or `subvertical_id` in the payload and normalize to `subvertical_id`
 		const payload: any = { ...data } as any;
-		if ((payload as any).domain !== undefined && (payload as any).domain !== null) {
-			// selectedDomain in UI may be a string; ensure it's a number when possible
-			const parsed = Number((payload as any).domain);
-			payload.domain_id = Number.isNaN(parsed) ? (payload as any).domain : parsed;
-			delete payload.domain;
+		if ((payload as any).subvertical !== undefined && (payload as any).subvertical !== null) {
+			// selectedSubVertical in UI may be a string; ensure it's a number when possible
+			const parsed = Number((payload as any).subvertical);
+			payload.subvertical_id = Number.isNaN(parsed) ? (payload as any).subvertical : parsed;
+			delete payload.subvertical;
 		}
 		const res = await fetcher<Capability>(`${BASE_URL}/capabilities`, {
 			method: 'POST',
@@ -161,6 +253,16 @@ export function useCapabilityApi() {
 	}, []);
 
 	return {
+		// New vertical/subvertical API
+		listVerticals,
+		createVertical,
+		updateVertical,
+		deleteVertical,
+		listSubVerticals,
+		createSubVertical,
+		updateSubVertical,
+		deleteSubVertical,
+		// Legacy domain API (for backwards compatibility)
 		listDomains,
 		createDomain,
 		updateDomain,
@@ -179,4 +281,3 @@ export function useCapabilityApi() {
 	};
 
 }
-

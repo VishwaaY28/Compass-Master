@@ -31,7 +31,7 @@ class AzureOpenAIClient:
     def __init__(self):
         self._config = None
         self._client = None
-        self.key_vault_url = "https://fstoazuregpt5.vault.azure.net/"
+        self.key_vault_url = "https://fstodevazureopenai.vault.azure.net/"
 
     def _load_config(self, settings: Optional[Dict[str, Any]] = None):
         """Load API key and endpoint from Azure Key Vault"""
@@ -39,14 +39,15 @@ class AzureOpenAIClient:
             kv_url = self.key_vault_url
             api_key = None
             endpoint = None
+            api_version = None
+            model = None
             
             credential = DefaultAzureCredential()
             kvclient = SecretClient(vault_url=kv_url, credential=credential)
             
             try:
                 # Load API key from Key Vault
-                api_key_secret = kvclient.get_secret("llm-key")
-                api_key = api_key_secret.value
+                api_key = kvclient.get_secret("llm-api-key").value
                 logger.info("API Key loaded from Key Vault")
             except Exception as e:
                 logger.error(f"Failed to load API key from Key Vault: {e}")
@@ -54,16 +55,18 @@ class AzureOpenAIClient:
             
             try:
                 # Load endpoint from Key Vault
-                endpoint_secret = kvclient.get_secret("llm-endpoint")
+                endpoint_secret = kvclient.get_secret("llm-base-endpoint")
                 endpoint = endpoint_secret.value
+                api_version_secret = kvclient.get_secret("llm-41-version")
+                api_version = api_version_secret.value
+                model_secret = kvclient.get_secret("llm-41")
+                model = model_secret.value
                 logger.info("Endpoint loaded from Key Vault")
             except Exception as e:
                 logger.warning(f"Failed to load endpoint from Key Vault: {e}; using default endpoint")
                 endpoint = "https://stg-secureapi.hexaware.com/api/azureai"
 
             # Use settings if provided, otherwise use defaults
-            api_version = "2024-12-01-preview"
-            model = "gpt-5.1"
             if settings:
                 api_version = settings.get("apiVersion", api_version)
                 model = settings.get("model", model)

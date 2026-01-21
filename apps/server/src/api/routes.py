@@ -2,20 +2,22 @@ import logging
 import re
 logging.basicConfig(level=logging.INFO)
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from tortoise.contrib.pydantic import pydantic_model_creator
 
-from database.repositories import capability_repository, process_repository, domain_repository, prompt_template_repository
-from database.models import Capability as CapabilityModel, Process as ProcessModel, Domain as DomainModel, SubProcess as SubProcessModel
+from database.repositories import capability_repository, process_repository, vertical_repository, prompt_template_repository
+from database.models import Capability as CapabilityModel, Process as ProcessModel, Vertical as VerticalModel, SubVertical as SubVerticalModel, SubProcess as SubProcessModel
 from utils.llm import azure_openai_client
 from utils.llm2 import gemini_client
+from utils.llmthinking import azure_openai_thinking_client
+from utils.llm_independent import azure_openai_independent_client
 from utils.csv_export import get_csv_exporter
 from config.llm_settings import llm_settings_manager
 import io
 import csv
-from fastapi.responses import StreamingResponse
+import json
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -32,18 +34,28 @@ class LLMConfigRequest(BaseModel):
 class ResearchRequest(BaseModel):
     query: str
 
+class CompassChatRequest(BaseModel):
+    query: str
+    vertical: str  # Selected vertical for context
+    temperature: Optional[float] = 0.7
+    max_tokens: Optional[int] = 2000
+
 @router.post("/capabilities/research")
 async def research_capabilities(payload: ResearchRequest):
     """
-    Analyze user query using LLM and return relevant capabilities.
+    OPTIMIZED: Use database search to filter candidates, then use LLM for ranking.
+    This approach:
+    1. Filters capabilities by keywords (fast database operation)
+    2. Builds hierarchy only for filtered items (reduces LLM context size)
+    3. Uses LLM to identify most specific matching level
+    
+    Hierarchy matching logic:
+    - If user query matches specific subprocesses -> return only those subprocesses
+    - Else if user query matches specific processes -> return those with their subprocesses
+    - Else return matching capabilities with their full structure
     """
     query = payload.query
-    # Fetch all capabilities
-    capabilities = await capability_repository.fetch_all_capabilities()
-    capability_names = [c.name for c in capabilities]
-
     logger.info(f"[Research] User query: {query}")
-    logger.info(f"[Research] Capability names: {capability_names}")
     
     provider = await llm_settings_manager.get_setting("provider", "secure")
     logger.info(f"[Research] Using LLM provider: {provider}")
@@ -54,39 +66,375 @@ async def research_capabilities(payload: ResearchRequest):
     else:
         llm_client = azure_openai_client
 
-    # Use LLM to analyze query and match capabilities
-    llm_result = await llm_client.generate_content(
-        prompt=f"Given the following capabilities: {capability_names}. Which are most relevant to the user query: '{query}'? Return a JSON object with a 'capabilities' key containing a list of relevant capability names."
-    )
-    logger.info(f"[Research] LLM raw result: {llm_result}")
+    # Step 1: OPTIMIZED - Filter capabilities by keywords first (database-level search)
+    query_lower = query.lower()
+    query_words = [w.strip() for w in query_lower.split() if len(w.strip()) > 2]
+    logger.info(f"[Research] Search keywords: {query_words}")
+    
+    filtered_capabilities = await capability_repository.search_capabilities_by_keywords(query_words)
+    logger.info(f"[Research] Filtered to {len(filtered_capabilities)} capabilities (from keyword search)")
+    
+    # If no keyword matches, fall back to all capabilities but limit to prevent overload
+    if not filtered_capabilities:
+        logger.info(f"[Research] No keyword matches found, fetching limited set of capabilities")
+        all_caps = await capability_repository.fetch_all_capabilities()
+        filtered_capabilities = all_caps[:20]  # Limit to top 20 to prevent LLM overload
+        logger.info(f"[Research] Using {len(filtered_capabilities)} capabilities as fallback")
+    
+    # Step 2: Build hierarchy only for FILTERED capabilities (not all!)
+    hierarchy_context = []
+    for cap in filtered_capabilities:
+        try:
+            processes = await cap.processes.all()
+        except Exception:
+            processes = []
 
-    # Extract relevant names from llm_result['data']['capabilities']
-    relevant_names = []
-    if isinstance(llm_result, dict):
-        data = llm_result.get("data", {})
-        if isinstance(data, dict):
-            relevant_names = data.get("capabilities", [])
-        elif isinstance(data, list):
-            relevant_names = data
-    logger.info(f"[Research] Relevant capability names from LLM: {relevant_names}")
-
-    relevant_caps = [c for c in capabilities if c.name in relevant_names]
-    logger.info(f"[Research] Matched capabilities: {[c.name for c in relevant_caps]}")
-
-    result = [
-        {
-            "id": c.id,
-            "name": c.name,
-            "description": c.description,
-            "domain": c.domain.name if getattr(c, 'domain', None) else None,
+        cap_data = {
+            "capability_id": cap.id,
+            "capability_name": cap.name,
+            "capability_description": cap.description,
+            "subvertical": cap.subvertical.name if getattr(cap, 'subvertical', None) else None,
+            "processes": []
         }
-        for c in relevant_caps
-    ]
-    logger.info(f"[Research] Response payload: {result}")
-    return JSONResponse(result)
+
+        for proc in processes:
+            try:
+                subprocs = await proc.subprocesses.all()
+            except Exception:
+                subprocs = []
+
+            proc_data = {
+                "process_id": proc.id,
+                "process_name": proc.name,
+                "process_level": getattr(proc.level, 'value', proc.level),
+                "process_description": proc.description,
+                "process_category": proc.category,
+                "subprocesses": []
+            }
+            
+            for sp in subprocs:
+                try:
+                    data_entities = await sp.data_entities.all()
+                except Exception:
+                    data_entities = []
+                
+                # Fetch data elements for each data entity
+                entities_with_elements = []
+                for de in data_entities:
+                    try:
+                        data_elements = await de.data_elements.all()
+                    except Exception:
+                        data_elements = []
+                    
+                    entities_with_elements.append({
+                        "data_entity_id": de.id,
+                        "data_entity_name": de.name,
+                        "data_entity_description": de.description,
+                        "data_elements": [
+                            {
+                                "data_element_id": elem.id,
+                                "data_element_name": elem.name,
+                                "data_element_description": elem.description,
+                            }
+                            for elem in data_elements
+                        ]
+                    })
+                
+                subprocess_data = {
+                    "subprocess_id": sp.id,
+                    "subprocess_name": sp.name,
+                    "subprocess_description": sp.description,
+                    "subprocess_category": sp.category,
+                    "subprocess_application": getattr(sp, "application", None),
+                    "subprocess_api": getattr(sp, "api", None),
+                    "data_entities": entities_with_elements
+                }
+                proc_data["subprocesses"].append(subprocess_data)
+            cap_data["processes"].append(proc_data)
+        
+        hierarchy_context.append(cap_data)
+
+    # Step 3: Use LLM to analyze query and identify matching items at all levels
+    hierarchy_text = re.sub(r'\s+', ' ', str(hierarchy_context)[:5000])  # Reduced context size
+    
+    llm_prompt = f"""
+    You are an expert Enterprise Architecture analyst. Analyze the user query and match it to the most SPECIFIC level in the business architecture hierarchy.
+    
+    Database Hierarchy:
+    - Capability (highest level): Business capability or domain
+    - Process (mid level): Business process under a capability  
+    - SubProcess (lowest level): Detailed activities within a process
+    
+    User Query: "{query}"
+    
+    Database Structure (pre-filtered for relevance):
+    {hierarchy_text}
+    
+    Instructions:
+    1. Carefully analyze the user query against the database structure.
+    2. If the query matches SUBPROCESS level (asking about specific activities, tasks, or detailed operations), return ONLY matching subprocesses with their exact IDs from the database.
+    3. If the query matches PROCESS level (asking about business processes), return ONLY matching processes with their exact IDs from the database.
+    4. If the query is general and matches CAPABILITY level, return ONLY matching capabilities with their exact IDs from the database.
+    5. DO NOT return parent items if you've matched specific child items.
+    6. Return exact IDs that exist in the database - these are critical for lookup.
+    7. If no exact matches found, return empty matching_items array and the system will provide broader matches.
+    
+    Return ONLY a valid JSON object (no markdown, no extra text) with this structure:
+    {{
+        "matching_level": "subprocess" | "process" | "capability",
+        "matching_items": [
+            {{
+                "id": <integer_id>,
+                "type": "subprocess" | "process" | "capability",
+                "name": "...",
+                "description": "..."
+            }}
+        ],
+        "confidence": <0-100>,
+        "explanation": "Why these items match the query"
+    }}
+    
+    Example response:
+    {{"matching_level": "capability", "matching_items": [{{"id": 1, "type": "capability", "name": "Customer Management", "description": "Managing customer relationships"}}], "confidence": 85, "explanation": "Query matches customer-related capabilities"}}
+    """
+
+    logger.info(f"[Research] Sending LLM prompt for deep hierarchy matching")
+    
+    try:
+        llm_result = await llm_client.generate_content(prompt=llm_prompt)
+        logger.info(f"[Research] LLM raw result: {llm_result}")
+        logger.info(f"[Research] LLM result type: {type(llm_result)}")
+        
+        # Extract matching items from LLM response
+        matching_data = {}
+        
+        # Debug: Print the full structure
+        logger.info(f"[Research] LLM result keys: {list(llm_result.keys()) if isinstance(llm_result, dict) else 'Not a dict'}")
+        
+        if isinstance(llm_result, dict):
+            data = llm_result.get("data", {})
+            logger.info(f"[Research] Data from LLM: {data}")
+            logger.info(f"[Research] Data type: {type(data)}")
+            
+            if isinstance(data, dict):
+                matching_data = data
+            elif isinstance(data, str):
+                # Try to parse if it's a JSON string
+                try:
+                    import json
+                    # Try to extract JSON from the string if it contains markdown
+                    data_str = data
+                    if "```json" in data_str:
+                        data_str = data_str.split("```json")[1].split("```")[0].strip()
+                    elif "```" in data_str:
+                        data_str = data_str.split("```")[1].split("```")[0].strip()
+                    
+                    matching_data = json.loads(data_str)
+                    logger.info(f"[Research] Parsed JSON from data string: {matching_data}")
+                except Exception as parse_err:
+                    logger.warning(f"[Research] Could not parse data as JSON: {data}, error: {str(parse_err)}")
+                    matching_data = {}
+        
+        matching_level = matching_data.get("matching_level", "capability")
+        matching_items = matching_data.get("matching_items", [])
+        confidence = matching_data.get("confidence", 0)
+        
+        logger.info(f"[Research] Matching level: {matching_level}, Items count: {len(matching_items)}, Confidence: {confidence}")
+        logger.info(f"[Research] Matching items from LLM: {matching_items}")
+
+        # Step 4: Build response based on matching level
+        result = []
+
+        if matching_level == "subprocess" and matching_items:
+            # Return subprocess-level matches with their parent process and capability
+            for item in matching_items:
+                subprocess_id = item.get("id")
+                try:
+                    # Fetch subprocess with process, capability and subvertical prefetched
+                    subprocess = await SubProcessModel.filter(id=subprocess_id, deleted_at=None).prefetch_related('process', 'process__capability', 'process__capability__subvertical').first()
+                    if not subprocess:
+                        logger.warning(f"[Research] Subprocess {subprocess_id} not found")
+                        continue
+                    
+                    process = subprocess.process
+                    if not process:
+                        logger.warning(f"[Research] Subprocess {subprocess_id} has no process")
+                        continue
+                    
+                    capability = process.capability
+                    if not capability:
+                        logger.warning(f"[Research] Process {process.id} has no capability")
+                        continue
+                    
+                    result.append({
+                        "id": subprocess.id,
+                        "name": subprocess.name,
+                        "description": subprocess.description,
+                        "type": "subprocess",
+                        "category": subprocess.category,
+                        "data": getattr(subprocess, "data", None),
+                        "application": getattr(subprocess, "application", None),
+                        "api": getattr(subprocess, "api", None),
+                        "parent_process": {
+                            "id": process.id,
+                            "name": process.name,
+                            "level": getattr(process.level, 'value', process.level),
+                        },
+                        "parent_capability": {
+                            "id": capability.id,
+                            "name": capability.name,
+                            "subvertical": capability.subvertical.name if (hasattr(capability, 'subvertical') and capability.subvertical and hasattr(capability.subvertical, 'name')) else None,
+                        }
+                    })
+                except Exception as e:
+                    logger.warning(f"[Research] Could not fetch subprocess {subprocess_id}: {str(e)}", exc_info=True)
+                    continue
+
+        elif matching_level == "process" and matching_items:
+            # Return process-level matches with their subprocesses and capability
+            for item in matching_items:
+                process_id = item.get("id")
+                try:
+                    # Fetch process with capability and subvertical prefetched
+                    process = await ProcessModel.filter(id=process_id, deleted_at=None).prefetch_related('capability', 'capability__subvertical', 'subprocesses').first()
+                    if not process:
+                        logger.warning(f"[Research] Process {process_id} not found")
+                        continue
+                    
+                    capability = process.capability
+                    if not capability:
+                        logger.warning(f"[Research] Process {process_id} has no capability")
+                        continue
+                    
+                    try:
+                        subprocs = await process.subprocesses.all()
+                    except Exception:
+                        subprocs = []
+
+                    subprocess_list = [
+                        {
+                            "id": sp.id,
+                            "name": sp.name,
+                            "description": sp.description,
+                            "category": sp.category,
+                            "data": getattr(sp, "data", None),
+                            "application": getattr(sp, "application", None),
+                            "api": getattr(sp, "api", None),
+                        }
+                        for sp in subprocs
+                    ]
+
+                    result.append({
+                        "id": process.id,
+                        "name": process.name,
+                        "description": process.description,
+                        "type": "process",
+                        "level": getattr(process.level, 'value', process.level),
+                        "category": process.category,
+                        "subprocesses": subprocess_list,
+                        "parent_capability": {
+                            "id": capability.id,
+                            "name": capability.name,
+                            "subvertical": capability.subvertical.name if (hasattr(capability, 'subvertical') and capability.subvertical and hasattr(capability.subvertical, 'name')) else None,
+                        }
+                    })
+                except Exception as e:
+                    logger.warning(f"[Research] Could not fetch process {process_id}: {str(e)}", exc_info=True)
+                    continue
+
+        else:
+            # Default: Return capability-level matches with full structure
+            logger.info(f"[Research] No specific matches found, returning matching capabilities or all capabilities")
+            
+            matched_capabilities = []
+            
+            # Try to match by ID first if we have matching_items
+            if matching_items and len(matching_items) > 0:
+                matching_ids = [item.get("id") for item in matching_items]
+                matched_capabilities = [c for c in capabilities if c.id in matching_ids]
+                logger.info(f"[Research] Found {len(matched_capabilities)} matching capabilities by ID")
+            
+            # If no ID matches, try name matching
+            if len(matched_capabilities) == 0 and query and len(capabilities) > 0:
+                logger.info(f"[Research] No ID matches found, trying name-based matching")
+                query_lower = query.lower()
+                query_words = query_lower.split()
+                
+                # Match if any query word appears in capability name or description
+                name_matched = []
+                for c in capabilities:
+                    cap_name_lower = c.name.lower()
+                    cap_desc_lower = c.description.lower() if c.description else ""
+                    
+                    # Check if any query word matches
+                    for word in query_words:
+                        if len(word) > 3 and (word in cap_name_lower or word in cap_desc_lower):
+                            name_matched.append(c)
+                            break
+                
+                if name_matched:
+                    matched_capabilities = name_matched
+                    logger.info(f"[Research] Name-matched {len(matched_capabilities)} capabilities")
+            
+            # Final fallback: return all capabilities if database has data
+            if len(matched_capabilities) == 0:
+                logger.info(f"[Research] No name matches either, falling back to all {len(capabilities)} capabilities")
+                matched_capabilities = capabilities
+
+            for cap in matched_capabilities:
+                try:
+                    processes = await cap.processes.all()
+                except Exception:
+                    processes = []
+
+                proc_list = []
+                for proc in processes:
+                    try:
+                        subprocs = await proc.subprocesses.all()
+                    except Exception:
+                        subprocs = []
+
+                    subprocess_list = [
+                        {
+                            "id": sp.id,
+                            "name": sp.name,
+                            "description": sp.description,
+                            "category": sp.category,
+                            "data": getattr(sp, "data", None),
+                            "application": getattr(sp, "application", None),
+                            "api": getattr(sp, "api", None),
+                        }
+                        for sp in subprocs
+                    ]
+
+                    proc_list.append({
+                        "id": proc.id,
+                        "name": proc.name,
+                        "level": getattr(proc.level, 'value', proc.level),
+                        "description": proc.description,
+                        "category": proc.category,
+                        "subprocesses": subprocess_list,
+                    })
+
+                result.append({
+                    "id": cap.id,
+                    "name": cap.name,
+                    "description": cap.description,
+                    "type": "capability",
+                    "subvertical": cap.subvertical.name if (hasattr(cap, 'subvertical') and cap.subvertical and hasattr(cap.subvertical, 'name')) else None,
+                    "processes": proc_list,
+                })
+
+        logger.info(f"[Research] Response payload items: {len(result)}, Types: {[r.get('type', 'unknown') for r in result]}")
+        return JSONResponse(result)
+
+    except Exception as e:
+        logger.error(f"[Research] Error during research: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Research failed: {str(e)}")
 
 
-Domain_Pydantic = pydantic_model_creator(DomainModel, name="Domain")
+Vertical_Pydantic = pydantic_model_creator(VerticalModel, name="Vertical")
+SubVertical_Pydantic = pydantic_model_creator(SubVerticalModel, name="SubVertical")
 Capability_Pydantic = pydantic_model_creator(CapabilityModel, name="Capability")
 Process_Pydantic = pydantic_model_creator(ProcessModel, name="Process")
 
@@ -94,11 +442,18 @@ Process_Pydantic = pydantic_model_creator(ProcessModel, name="Process")
 class DomainCreateRequest(BaseModel):
     name: str
 
+class VerticalCreateRequest(BaseModel):
+    name: str
+
+class SubVerticalCreateRequest(BaseModel):
+    name: str
+    vertical_id: int
+
 class CapabilityCreateRequest(BaseModel):
     name: str
     description: str
     process_id: Optional[int] = None
-    domain_id: Optional[int] = None
+    subvertical_id: Optional[int] = None
 
 
 class SubProcessCreateRequest(BaseModel):
@@ -124,6 +479,77 @@ class ProcessCreateRequest(BaseModel):
 @router.get("/health")
 async def health_check():
     return JSONResponse(content={"status": "ok"}, status_code=200)
+
+
+@router.get("/capabilities/diagnostics")
+async def get_diagnostics():
+    """Get diagnostic information about the database and capabilities"""
+    try:
+        # Fetch all capabilities
+        capabilities = await capability_repository.fetch_all_capabilities()
+        
+        # Build capability info
+        cap_info = []
+        total_data_entities = 0
+        total_data_elements = 0
+        
+        for cap in capabilities:
+            try:
+                processes = await cap.processes.all()
+                proc_count = len(processes)
+                
+                # Count subprocesses and data entities
+                subprocess_count = 0
+                cap_data_entities = 0
+                cap_data_elements = 0
+                
+                for proc in processes:
+                    try:
+                        subprocs = await proc.subprocesses.all()
+                        subprocess_count += len(subprocs)
+                        
+                        for sp in subprocs:
+                            try:
+                                data_entities = await sp.data_entities.all()
+                                cap_data_entities += len(data_entities)
+                                total_data_entities += len(data_entities)
+                                
+                                for de in data_entities:
+                                    try:
+                                        data_elements = await de.data_elements.all()
+                                        cap_data_elements += len(data_elements)
+                                        total_data_elements += len(data_elements)
+                                    except:
+                                        pass
+                            except:
+                                pass
+                    except:
+                        pass
+                
+                cap_info.append({
+                    "id": cap.id,
+                    "name": cap.name,
+                    "subvertical": cap.subvertical.name if getattr(cap, 'subvertical', None) else None,
+                    "processes_count": proc_count,
+                    "subprocesses_count": subprocess_count,
+                    "data_entities_count": cap_data_entities,
+                    "data_elements_count": cap_data_elements,
+                })
+            except Exception as e:
+                logger.error(f"[Diagnostics] Error processing capability {cap.id}: {str(e)}")
+                continue
+        
+        return JSONResponse({
+            "status": "ok",
+            "total_capabilities": len(cap_info),
+            "total_data_entities": total_data_entities,
+            "total_data_elements": total_data_elements,
+            "capabilities": cap_info,
+            "message": f"Database contains {len(cap_info)} capabilities, {total_data_entities} data entities, and {total_data_elements} data elements"
+        })
+    except Exception as e:
+        logger.error(f"[Diagnostics] Error: {str(e)}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
 # LLM Provider Management
@@ -185,41 +611,123 @@ async def get_prompt_template(process_level: str):
     return JSONResponse({"process_level": process_level, "prompt": prompt_obj.prompt})
 
 
-# CRUD for Domains
-@router.post("/domains", response_model=Domain_Pydantic)
-async def create_domain(payload: DomainCreateRequest):
-    obj = await domain_repository.create_domain(payload.name)
-    return await Domain_Pydantic.from_tortoise_orm(obj)
+# CRUD for Verticals
+@router.post("/verticals", response_model=Vertical_Pydantic)
+async def create_vertical(payload: VerticalCreateRequest):
+    obj = await vertical_repository.create_vertical(payload.name)
+    return await Vertical_Pydantic.from_tortoise_orm(obj)
 
 
-@router.get("/domains", response_model=List[Domain_Pydantic])
-async def list_domains():
-    # Seed default domains if none exist
-    await domain_repository.seed_default_domains()
+@router.get("/verticals", response_model=List[Vertical_Pydantic])
+async def list_verticals():
+    # Seed default verticals if none exist
+    await vertical_repository.seed_default_verticals()
     
-    domains = await domain_repository.fetch_all_domains()
-    return await Domain_Pydantic.from_queryset(DomainModel.all())
+    verticals = await vertical_repository.fetch_all_verticals()
+    return await Vertical_Pydantic.from_queryset(VerticalModel.all())
 
 
-@router.get("/domains/{domain_id}", response_model=Domain_Pydantic)
+@router.get("/verticals/{vertical_id}", response_model=Vertical_Pydantic)
+async def get_vertical(vertical_id: int):
+    obj = await vertical_repository.fetch_vertical_by_id(vertical_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Vertical not found")
+    return await Vertical_Pydantic.from_tortoise_orm(obj)
+
+
+@router.put("/verticals/{vertical_id}", response_model=Vertical_Pydantic)
+async def update_vertical(vertical_id: int, payload: VerticalCreateRequest):
+    obj = await vertical_repository.update_vertical(vertical_id, payload.name)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Vertical not found")
+    return await Vertical_Pydantic.from_tortoise_orm(obj)
+
+
+@router.delete("/verticals/{vertical_id}")
+async def delete_vertical(vertical_id: int):
+    ok = await vertical_repository.delete_vertical(vertical_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Vertical not found")
+    return {"deleted": True}
+
+
+# CRUD for SubVerticals
+@router.post("/subverticals", response_model=SubVertical_Pydantic)
+async def create_subvertical(payload: SubVerticalCreateRequest):
+    obj = await vertical_repository.create_subvertical(payload.name, payload.vertical_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Vertical not found")
+    return await SubVertical_Pydantic.from_tortoise_orm(obj)
+
+
+@router.get("/subverticals", response_model=List[SubVertical_Pydantic])
+async def list_subverticals(vertical_id: Optional[int] = Query(None, alias="vertical_id")):
+    if vertical_id:
+        subverticals = await vertical_repository.fetch_subverticals_by_vertical(vertical_id)
+    else:
+        subverticals = await vertical_repository.fetch_all_subverticals()
+    return [await SubVertical_Pydantic.from_tortoise_orm(sv) for sv in subverticals]
+
+
+@router.get("/subverticals/{subvertical_id}", response_model=SubVertical_Pydantic)
+async def get_subvertical(subvertical_id: int):
+    obj = await vertical_repository.fetch_subvertical_by_id(subvertical_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="SubVertical not found")
+    return await SubVertical_Pydantic.from_tortoise_orm(obj)
+
+
+@router.put("/subverticals/{subvertical_id}", response_model=SubVertical_Pydantic)
+async def update_subvertical(subvertical_id: int, payload: SubVerticalCreateRequest):
+    obj = await vertical_repository.update_subvertical(subvertical_id, name=payload.name, vertical_id=payload.vertical_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="SubVertical not found")
+    return await SubVertical_Pydantic.from_tortoise_orm(obj)
+
+
+@router.delete("/subverticals/{subvertical_id}")
+async def delete_subvertical(subvertical_id: int):
+    ok = await vertical_repository.delete_subvertical(subvertical_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="SubVertical not found")
+    return {"deleted": True}
+
+
+# CRUD for Legacy Domains (for backwards compatibility)
+@router.post("/domains", response_model=Vertical_Pydantic)
+async def create_domain(payload: DomainCreateRequest):
+    obj = await vertical_repository.create_vertical(payload.name)
+    return await Vertical_Pydantic.from_tortoise_orm(obj)
+
+
+@router.get("/domains", response_model=List[Vertical_Pydantic])
+async def list_domains():
+    # Seed default verticals if none exist
+    await vertical_repository.seed_default_verticals()
+    
+    verticals = await vertical_repository.fetch_all_verticals()
+    return await Vertical_Pydantic.from_queryset(VerticalModel.all())
+
+
+@router.get("/domains/{domain_id}", response_model=Vertical_Pydantic)
 async def get_domain(domain_id: int):
-    obj = await domain_repository.fetch_domain_by_id(domain_id)
+    obj = await vertical_repository.fetch_vertical_by_id(domain_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Domain not found")
-    return await Domain_Pydantic.from_tortoise_orm(obj)
+    return await Vertical_Pydantic.from_tortoise_orm(obj)
 
 
-@router.put("/domains/{domain_id}", response_model=Domain_Pydantic)
+@router.put("/domains/{domain_id}", response_model=Vertical_Pydantic)
 async def update_domain(domain_id: int, payload: DomainCreateRequest):
-    obj = await domain_repository.update_domain(domain_id, payload.name)
+    obj = await vertical_repository.update_vertical(domain_id, payload.name)
     if not obj:
         raise HTTPException(status_code=404, detail="Domain not found")
-    return await Domain_Pydantic.from_tortoise_orm(obj)
+    return await Vertical_Pydantic.from_tortoise_orm(obj)
 
 
 @router.delete("/domains/{domain_id}")
 async def delete_domain(domain_id: int):
-    ok = await domain_repository.delete_domain(domain_id)
+    ok = await vertical_repository.delete_vertical(domain_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Domain not found")
     return {"deleted": True}
@@ -227,7 +735,7 @@ async def delete_domain(domain_id: int):
 
 @router.post("/capabilities", response_model=Capability_Pydantic)
 async def create_capability(payload: CapabilityCreateRequest):
-    obj = await capability_repository.create_capability(payload.name, payload.description, payload.domain_id)
+    obj = await capability_repository.create_capability(payload.name, payload.description, payload.subvertical_id)
     return await Capability_Pydantic.from_tortoise_orm(obj)
 
 
@@ -252,11 +760,15 @@ async def export_capability_csv(capability_id: int):
         "subprocess_name",
         "subprocess_description",
         "subprocess_category",
+        "data_entity_name",
+        "data_entity_description",
+        "subprocess_application",
+        "subprocess_api",
     ]
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
 
-    domain_name = cap.domain.name if getattr(cap, 'domain', None) else ""
+    subvertical_name = cap.subvertical.name if getattr(cap, 'subvertical', None) else ""
 
     for p in processes:
         try:
@@ -267,7 +779,7 @@ async def export_capability_csv(capability_id: int):
         if not subs:
             writer.writerow({
                 "capability_name": cap.name,
-                "domain": domain_name,
+                "domain": subvertical_name,
                 "process_type": getattr(p.level, 'value', p.level),
                 "process_name": p.name,
                 "process_description": p.description or "",
@@ -275,20 +787,51 @@ async def export_capability_csv(capability_id: int):
                 "subprocess_name": "",
                 "subprocess_description": "",
                 "subprocess_category": "",
+                "data_entity_name": "",
+                "data_entity_description": "",
+                "subprocess_application": "",
+                "subprocess_api": "",
             })
         else:
             for s in subs:
-                writer.writerow({
-                    "capability_name": cap.name,
-                    "domain": domain_name,
-                    "process_type": getattr(p.level, 'value', p.level),
-                    "process_name": p.name,
-                    "process_description": p.description or "",
-                    "process_category": p.category or "",
-                    "subprocess_name": s.name,
-                    "subprocess_description": s.description or "",
-                    "subprocess_category": s.category or "",
-                })
+                try:
+                    data_entities = await s.data_entities.all()
+                except Exception:
+                    data_entities = []
+                
+                if not data_entities:
+                    writer.writerow({
+                        "capability_name": cap.name,
+                        "domain": subvertical_name,
+                        "process_type": getattr(p.level, 'value', p.level),
+                        "process_name": p.name,
+                        "process_description": p.description or "",
+                        "process_category": p.category or "",
+                        "subprocess_name": s.name,
+                        "subprocess_description": s.description or "",
+                        "subprocess_category": s.category or "",
+                        "data_entity_name": "",
+                        "data_entity_description": "",
+                        "subprocess_application": getattr(s, "application", None) or "",
+                        "subprocess_api": getattr(s, "api", None) or "",
+                    })
+                else:
+                    for de in data_entities:
+                        writer.writerow({
+                            "capability_name": cap.name,
+                            "domain": subvertical_name,
+                            "process_type": getattr(p.level, 'value', p.level),
+                            "process_name": p.name,
+                            "process_description": p.description or "",
+                            "process_category": p.category or "",
+                            "subprocess_name": s.name,
+                            "subprocess_description": s.description or "",
+                            "subprocess_category": s.category or "",
+                            "data_entity_name": de.name,
+                            "data_entity_description": de.description or "",
+                            "subprocess_application": getattr(s, "application", None) or "",
+                            "subprocess_api": getattr(s, "api", None) or "",
+                        })
 
     csv_bytes = output.getvalue().encode("utf-8")
     output.close()
@@ -321,15 +864,44 @@ async def list_capabilities():
             except Exception:
                 subprocs = []
             
-            subprocess_list = [
-                {
+            subprocess_list = []
+            for sp in subprocs:
+                try:
+                    data_entities = await sp.data_entities.all()
+                except Exception:
+                    data_entities = []
+                
+                # Fetch data elements for each data entity
+                entities_with_elements = []
+                for de in data_entities:
+                    try:
+                        data_elements = await de.data_elements.all()
+                    except Exception:
+                        data_elements = []
+                    
+                    entities_with_elements.append({
+                        "data_entity_id": de.id,
+                        "data_entity_name": de.name,
+                        "data_entity_description": de.description,
+                        "data_elements": [
+                            {
+                                "data_element_id": elem.id,
+                                "data_element_name": elem.name,
+                                "data_element_description": elem.description,
+                            }
+                            for elem in data_elements
+                        ]
+                    })
+                
+                subprocess_list.append({
                     "id": sp.id,
                     "name": sp.name,
                     "description": sp.description,
                     "category": sp.category,
-                }
-                for sp in subprocs
-            ]
+                    "data_entities": entities_with_elements,
+                    "application": getattr(sp, "application", None),
+                    "api": getattr(sp, "api", None),
+                })
             
             proc_list.append({
                 "id": p.id,
@@ -340,11 +912,25 @@ async def list_capabilities():
                 "subprocesses": subprocess_list,
             })
 
+        # Fetch vertical through subvertical relationship
+        subvertical_name = None
+        vertical_name = None
+        if getattr(c, 'subvertical', None):
+            subvertical_name = c.subvertical.name
+            try:
+                # Fetch the related vertical
+                vertical = await c.subvertical.vertical
+                if vertical:
+                    vertical_name = vertical.name
+            except Exception:
+                vertical_name = None
+
         result.append({
             "id": c.id,
             "name": c.name,
             "description": c.description,
-            "domain": c.domain.name if getattr(c, 'domain', None) else None,
+            "vertical": vertical_name,
+            "subvertical": subvertical_name,
             "processes": proc_list,
         })
 
@@ -361,7 +947,7 @@ async def get_capability(capability_id: int):
 
 @router.put("/capabilities/{capability_id}", response_model=Capability_Pydantic)
 async def update_capability(capability_id: int, payload: CapabilityCreateRequest):
-    obj = await capability_repository.update_capability(capability_id, name=payload.name, description=payload.description, domain_id=payload.domain_id)
+    obj = await capability_repository.update_capability(capability_id, name=payload.name, description=payload.description, subvertical_id=payload.subvertical_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Capability not found")
     return await Capability_Pydantic.from_tortoise_orm(obj)
@@ -404,6 +990,9 @@ async def create_process(payload: ProcessCreateRequest):
             "name": s.name,
             "description": s.description,
             "category": getattr(s, "category", None),
+            "data": getattr(s, "data", None),
+            "application": getattr(s, "application", None),
+            "api": getattr(s, "api", None),
         }
         for s in subs
     ]
@@ -482,8 +1071,43 @@ async def create_subprocess(payload: SubProcessCreateRequestWithParent):
         "level": "subprocess",
         "description": subproc.description,
         "category": getattr(subproc, "category", None),
+        "data": getattr(subproc, "data", None),
+        "application": getattr(subproc, "application", None),
+        "api": getattr(subproc, "api", None),
         "parent_process_id": payload.parent_process_id,
     }
+    
+    return JSONResponse(result)
+
+
+@router.get("/subprocesses")
+async def list_subprocesses(process_id: Optional[int] = Query(None, alias="process_id")):
+    """Get all subprocesses for a given process"""
+    if process_id is None:
+        raise HTTPException(status_code=400, detail="process_id parameter is required")
+    
+    try:
+        process = await ProcessModel.get(id=process_id, deleted_at=None)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Process not found")
+    
+    try:
+        subprocs = await process.subprocesses.all()
+    except Exception:
+        subprocs = []
+    
+    result = [
+        {
+            "id": sp.id,
+            "name": sp.name,
+            "description": sp.description,
+            "category": getattr(sp, "category", None),
+            "data": getattr(sp, "data", None),
+            "application": getattr(sp, "application", None),
+            "api": getattr(sp, "api", None),
+        }
+        for sp in subprocs
+    ]
     
     return JSONResponse(result)
 
@@ -560,13 +1184,55 @@ async def generate_processes(payload: GenerateProcessRequest):
             logger.error(f"Failed to save LLM response to CSV: {str(e)}")
             # Don't fail the entire request if CSV export fails, just log it
         
+        # Save processes to database
+        saved_processes = []
+        try:
+            processes_data = generated_data.get("processes", [])
+            if not isinstance(processes_data, list):
+                logger.warning(f"Expected 'processes' to be a list, got {type(processes_data)}. Wrapping in list.")
+                processes_data = [processes_data]
+            
+            for process_item in processes_data:
+                if not isinstance(process_item, dict):
+                    logger.warning(f"Skipping non-dict process item: {process_item}")
+                    continue
+                
+                # Extract process data
+                process_name = process_item.get("business_process") or process_item.get("name", "Unnamed Process")
+                process_description = process_item.get("activities_and_description") or process_item.get("description", "")
+                process_category = process_item.get("category", "")
+                
+                # Create process in database
+                proc = await process_repository.create_process(
+                    name=process_name,
+                    level=payload.process_type or "core",
+                    description=process_description,
+                    capability_id=payload.capability_id,
+                    category=process_category,
+                    subprocesses=[]  # Subprocesses can be added separately if needed
+                )
+                
+                saved_processes.append({
+                    "id": proc.id,
+                    "name": proc.name,
+                    "description": proc.description,
+                    "category": proc.category,
+                    "level": proc.level
+                })
+                logger.info(f"Created process: {proc.name} (id={proc.id})")
+            
+            logger.info(f"Saved {len(saved_processes)} processes to database")
+        except Exception as e:
+            logger.error(f"Error saving processes to database: {str(e)}", exc_info=True)
+            # Don't fail the entire request if database save fails, just log it
+        
         # Return the LLM-generated data directly without restrictive parsing
         # The LLM is already given process_type constraint, so let it generate freely
         
         return {
             "status": "success",
             "message": f"Generated processes for {payload.capability_name}",
-            "processes": [],
+            "processes": saved_processes,
             "data": generated_data,
             "process_type": payload.process_type or 'core',
         }
@@ -574,7 +1240,237 @@ async def generate_processes(payload: GenerateProcessRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error generating processes: {str(e)}")
+        logger.error(f"Error generating processes: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate processes: {str(e)}")
 
 
+@router.post("/chat/compass")
+async def compass_chat(payload: CompassChatRequest):
+    """
+    Compass Chat endpoint - Uses Azure OpenAI LLM to analyze user queries against vertical data.
+    Returns both the agent's thinking process and final analysis result.
+    """
+    try:
+        query = payload.query
+        vertical_name = payload.vertical
+        logger.info(f"[CompassChat] Query: {query}, Vertical: {vertical_name}")
+
+        # Fetch vertical by name from all verticals
+        all_verticals = await vertical_repository.fetch_all_verticals()
+        vertical = next((v for v in all_verticals if v.name == vertical_name), None)
+        if not vertical:
+            raise HTTPException(status_code=404, detail=f"Vertical '{vertical_name}' not found")
+
+        # Build comprehensive vertical data context
+        vertical_data = await _build_vertical_context(vertical)
+
+        # Use Azure OpenAI thinking client to analyze query
+        thinking, result = azure_openai_thinking_client.think_and_analyze(
+            query=query,
+            vertical=vertical_name,
+            vertical_data=vertical_data,
+            temperature=payload.temperature,
+            max_tokens=payload.max_tokens,
+        )
+
+        logger.info(f"[CompassChat] Analysis complete")
+
+        return {
+            "status": "success",
+            "query": query,
+            "vertical": vertical_name,
+            "thinking": thinking,
+            "result": result,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[CompassChat] Error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to process compass chat: {str(e)}"
+        )
+
+
+@router.get("/chat/compass/stream")
+async def compass_chat_stream(
+    query: str = Query(...),
+    vertical: str = Query(...),
+    temperature: float = Query(0.2),
+    max_tokens: int = Query(2000),
+):
+    """
+    Streaming version of Compass Chat - streams thinking and result progressively.
+    """
+    try:
+        logger.info(f"[CompassChat Stream] Query: {query}, Vertical: {vertical}")
+
+        # Fetch vertical by name
+        all_verticals = await vertical_repository.fetch_all_verticals()
+        vertical_obj = next((v for v in all_verticals if v.name == vertical), None)
+        if not vertical_obj:
+            raise HTTPException(status_code=404, detail=f"Vertical '{vertical}' not found")
+
+        # Build vertical context
+        vertical_data = await _build_vertical_context(vertical_obj)
+
+        async def generate():
+            try:
+                # Stream the thinking and result
+                for chunk_type, content in azure_openai_thinking_client.stream_think_and_analyze(
+                    query=query,
+                    vertical=vertical,
+                    vertical_data=vertical_data,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ):
+                    # Send JSON-formatted chunks
+                    chunk = {
+                        "type": chunk_type,
+                        "content": content,
+                    }
+                    yield f"data: {json.dumps(chunk)}\n\n"
+
+                # Send completion signal
+                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+
+            except Exception as e:
+                logger.error(f"[CompassChat Stream] Error: {e}")
+                yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[CompassChat Stream] Error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to stream compass chat: {str(e)}"
+        )
+
+
+@router.post("/chat/compass/independent")
+async def compass_chat_independent(payload: CompassChatRequest):
+    """
+    Independent Compass Chat endpoint - Uses Azure OpenAI LLM to analyze user queries WITHOUT database context.
+    The LLM will rely on its own knowledge and reasoning instead of vertical data from the database.
+    Returns both the agent's thinking process and final analysis result.
+    """
+    try:
+        query = payload.query
+        vertical_name = payload.vertical
+        logger.info(f"[CompassChat Independent] Query: {query}, Vertical: {vertical_name} (no DB context)")
+
+        # Use independent Azure OpenAI client to analyze query WITHOUT database data
+        thinking, result = azure_openai_independent_client.think_and_analyze(
+            query=query,
+            vertical=vertical_name,
+            temperature=payload.temperature,
+            max_tokens=payload.max_tokens,
+        )
+
+        logger.info(f"[CompassChat Independent] Analysis complete")
+
+        return {
+            "status": "success",
+            "query": query,
+            "vertical": vertical_name,
+            "thinking": thinking,
+            "result": result,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[CompassChat Independent] Error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to process independent compass chat: {str(e)}"
+        )
+
+
+async def _build_vertical_context(vertical) -> dict:
+    """Build comprehensive context data for a vertical including data entities and elements"""
+    try:
+        # Get all subverticals for this vertical
+        subverticals = await vertical.subverticals.all()
+
+        capabilities_list = []
+        processes_list = []
+        subprocesses_list = []
+        data_entities_list = []
+        data_elements_list = []
+
+        for subvert in subverticals:
+            # Get capabilities for each subvertical
+            capabilities = await subvert.capabilities.all()
+
+            for cap in capabilities:
+                capabilities_list.append({
+                    "id": cap.id,
+                    "name": cap.name,
+                    "description": cap.description,
+                })
+
+                # Get processes for each capability
+                processes = await cap.processes.all()
+                for proc in processes:
+                    processes_list.append({
+                        "id": proc.id,
+                        "name": proc.name,
+                        "description": proc.description,
+                        "category": proc.category,
+                        "level": proc.level.value if hasattr(proc.level, 'value') else str(proc.level),
+                    })
+
+                    # Get subprocesses
+                    subprocs = await proc.subprocesses.all()
+                    for subproc in subprocs:
+                        subprocesses_list.append({
+                            "id": subproc.id,
+                            "name": subproc.name,
+                            "description": subproc.description,
+                            "category": subproc.category,
+                            "application": subproc.application,
+                            "api": subproc.api,
+                            "parent_process_id": proc.id,
+                        })
+
+                        # Get data entities for each subprocess
+                        try:
+                            data_entities = await subproc.data_entities.all()
+                            for data_entity in data_entities:
+                                data_entities_list.append({
+                                    "id": data_entity.id,
+                                    "name": data_entity.name,
+                                    "description": data_entity.description,
+                                    "parent_subprocess_id": subproc.id,
+                                })
+
+                                # Get data elements for each data entity
+                                try:
+                                    data_elements = await data_entity.data_elements.all()
+                                    for data_element in data_elements:
+                                        data_elements_list.append({
+                                            "id": data_element.id,
+                                            "name": data_element.name,
+                                            "description": data_element.description,
+                                            "parent_data_entity_id": data_entity.id,
+                                            "parent_subprocess_id": subproc.id,
+                                        })
+                                except Exception as e:
+                                    logger.warning(f"Error fetching data elements for entity {data_entity.id}: {e}")
+                        except Exception as e:
+                            logger.warning(f"Error fetching data entities for subprocess {subproc.id}: {e}")
+
+        return {
+            "vertical_name": vertical.name,
+            "capabilities": capabilities_list,  # Limit for context
+            "processes": processes_list,
+            "subprocesses": subprocesses_list,
+            "data_entities": data_entities_list,
+            "data_elements": data_elements_list,
+        }
+
+    except Exception as e:
+        logger.warning(f"Error building vertical context: {e}")
+        return {"vertical_name": vertical.name}

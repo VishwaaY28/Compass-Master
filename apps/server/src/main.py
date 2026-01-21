@@ -37,6 +37,9 @@ register_tortoise(
     add_exception_handlers=True,
 )
 
+# Import seed function
+from database.seed import run_seed
+
 
 # Ensure DB schema compatibility on startup (add missing columns when safe)
 logger = logging.getLogger(__name__)
@@ -92,6 +95,15 @@ def _on_startup_check_db():
         _ensure_process_capability_column()
     except Exception as e:
         logger.warning(f"Startup DB compatibility check failed: {e}")
+
+@app.on_event("startup")
+async def _on_startup_seed_db():
+    """Run database seeding on startup"""
+    try:
+        logger.info("Starting database seeding...")
+        await run_seed()
+    except Exception as e:
+        logger.error(f"Startup database seeding failed: {e}", exc_info=True)
 
 if __name__ == "__main__":
     import uvicorn
