@@ -122,7 +122,7 @@ class CSVExporter:
             A list of process dictionaries
         """
         if isinstance(data, list):
-            return data
+            return self._normalize_processes(data)
 
         if not isinstance(data, dict):
             logger.warning(f"Expected dict or list, got {type(data)}")
@@ -142,7 +142,7 @@ class CSVExporter:
             if key in data:
                 val = data.get(key)
                 if isinstance(val, list):
-                    return val
+                    return self._normalize_processes(val)
 
         # Try a case-insensitive, punctuation-insensitive match
         lookup = {self._normalize_key(k): v for k, v in data.items()}
@@ -150,10 +150,33 @@ class CSVExporter:
             if target in lookup:
                 val = lookup[target]
                 if isinstance(val, list):
-                    return val
+                    return self._normalize_processes(val)
 
         logger.warning(f"No processes found in response. Available keys: {list(data.keys())}")
         return []
+
+    def _normalize_processes(self, processes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Normalize process dictionaries to ensure consistent field names.
+        
+        Handles both old format (name, description) and new format (business_process, activities_and_description)
+        """
+        normalized = []
+        for proc in processes:
+            if not isinstance(proc, dict):
+                logger.warning(f"Skipping non-dict process: {proc}")
+                continue
+            
+            # Create normalized process dict
+            normalized_proc = {
+                "name": proc.get("business_process") or proc.get("name", "Unnamed"),
+                "description": proc.get("activities_and_description") or proc.get("description", ""),
+                "category": proc.get("category", ""),
+                "subprocesses": proc.get("subprocesses", [])
+            }
+            normalized.append(normalized_proc)
+        
+        return normalized
 
     @staticmethod
     def _normalize_key(key: str) -> str:

@@ -7,17 +7,20 @@ class TimestampMixin(models.Model):
   updated_at = fields.DatetimeField(auto_now=True)
   deleted_at = fields.DatetimeField(null=True)
 
-class Domain(TimestampMixin):
+class Vertical(TimestampMixin):
   id = fields.IntField(pk=True)
   name = fields.CharField(max_length=50)
 
+class SubVertical(TimestampMixin):
+  id = fields.IntField(pk=True)
+  name = fields.CharField(max_length=50)
+  vertical = fields.ForeignKeyField('models.Vertical', related_name='subverticals', null=True)
 
 class Capability(TimestampMixin):
     id = fields.IntField(pk=True)
     name = fields.CharField(max_length=255)
     description = fields.TextField()
-    domain = fields.ForeignKeyField('models.Domain', related_name='capabilities', null=True)
-
+    subvertical = fields.ForeignKeyField('models.SubVertical', related_name='capabilities', null=True)
 
 class ProcessLevel(str, Enum):
     ENTERPRISE = "enterprise"
@@ -31,6 +34,7 @@ class Process(TimestampMixin):
     description = fields.TextField()
     capability = fields.ForeignKeyField('models.Capability', related_name='processes', null=True)
     category = fields.CharField(max_length=255, null=True)
+    parent_process = fields.ForeignKeyField('models.Process', related_name='child_processes', null=True)
 
 class SubProcess(TimestampMixin):
   id = fields.IntField(pk=True)
@@ -38,6 +42,21 @@ class SubProcess(TimestampMixin):
   description = fields.TextField(null=True)
   process = fields.ForeignKeyField('models.Process', related_name='subprocesses', null=False)
   category = fields.CharField(max_length=255, null=True)
+  parent_subprocess = fields.ForeignKeyField('models.SubProcess', related_name='child_subprocesses', null=True)
+  application = fields.TextField(null=True)
+  api = fields.TextField(null=True)
+
+class DataEntity(TimestampMixin):
+  id = fields.IntField(pk=True)
+  name = fields.CharField(max_length=255)
+  description = fields.TextField(null=True)
+  subprocess = fields.ForeignKeyField('models.SubProcess', related_name='data_entities', null=False)
+
+class DataElement(TimestampMixin):
+  id = fields.IntField(pk=True)
+  name = fields.CharField(max_length=255)
+  description = fields.TextField(null=True)
+  data_entity = fields.ForeignKeyField('models.DataEntity', related_name='data_elements', null=False)
 
 class LLMSettings(TimestampMixin):
   id = fields.IntField(pk=True)

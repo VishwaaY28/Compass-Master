@@ -1,4 +1,5 @@
 import logging
+import os
 import google.generativeai as genai
 from typing import List, Dict, Any, Optional
 from env import env
@@ -36,9 +37,12 @@ class GeminiClient:
     def _load_config(self):
         """Load config from environment variables"""
         if self._config is None:
+            api_key = "AIzaSyAOPjWyUM8bLKMJX1wwNtZ927CS2OzU9JI"
+            model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+
             self._config = {
-                "api_key": "AIzaSyA6a2MPejOQJYGskVDgST3WbCpE1-V4vVU",
-                "model": "gemini-2.5-flash-lite",
+                "api_key": api_key,
+                "model": model,
             }
             if self._config.get("model"):
                 logger.info(f"Loaded Gemini config - Model: {self._config['model']}")
@@ -72,10 +76,21 @@ class GeminiClient:
         description: str,
         domain: str,
         process_type: str,
+        prompt_text: str,
     ) -> Dict[str, Any]:
-        """Generate processes for a capability in a specific domain with a given process type using Gemini LLM"""
-        prompt_text = f"Generate {process_type}-level processes for the capability '{capability_name}' (Description: {description}) in the {domain} domain. Return ONLY valid JSON with a 'processes' array containing process objects with 'name', 'category', and 'description' fields."
-        return await self.generate_json(prompt_text=prompt_text, purpose="processes", capability_name=capability_name, domain=domain, process_type=process_type, capability_description=description)
+        """Generate processes for a capability in a specific domain with a given process type using Gemini LLM
+        
+        If process_type == 'subprocess', generates subprocesses for a parent process.
+        Otherwise, generates processes for a capability.
+        """
+        return await self.generate_json(
+            prompt_text=prompt_text,
+            purpose="processes" if process_type != 'subprocess' else "subprocesses",
+            capability_name=capability_name,
+            domain=domain,
+            process_type=process_type,
+            capability_description=description
+        )
 
     async def generate_json(self, *, prompt_text: str, purpose: str = "general", context_sections: Optional[List[str]] = None, capability_name: Optional[str] = None, domain: Optional[str] = None, process_type: Optional[str] = None, capability_description: Optional[str] = None) -> Dict[str, Any]:
         """Unified generator that requests strict JSON and parses robustly using Gemini.
@@ -113,35 +128,58 @@ class GeminiClient:
                 for i, section in enumerate(context_sections, 1):
                     workspace_content += f"\n{i}. {section}\n"
 
-            schema_example = {
-                "capability_name": capability_name,
-                "domain": domain,
-                "process_type": process_type,
-                "processes": [
-                    {"name": "Example Process", "description": "",
-                     "subprocesses": [{"name": "Example Sub", "description": ""}]}
-                ]
-            }
-
-            system_prompt = (
-                f"You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in classifying business capabilities."
-                f"\n\n## Task:\n"
-                f"Generate a **comprehensive list of high-level Business Capabilities (Processes)** for the sub-vertical **'{capability_name}'** within the **{domain}** domain. The processes must be categorized by their **Process Type** (Core or Support)."
-                f"\n\n## Input Variables:\n"
-                f"- **domain**: {domain}\n"
-                f"- **subvertical_name**: {capability_name},{capability_description}\n"
-                f"- **process_type_filter**: {process_type} (Filter: Only generate processes matching this type: 'Core' or 'Support')"
-                f"\n\n## Requirements:\n"
-                f"- The list must be **comprehensive**, capturing all relevant, high-level capabilities in the specified sub-vertical and matching the `{process_type}` filter. **Do not impose a limit on the number of processes.**"
-                f"- Each capability must have a **Name** (Business Process), a **Category** (Front/Middle/Back Office), a **Type** (Core/Support), and a detailed **Description** (Activities and Description)."
-                f"- The **Category** must be one of: **'Front Office'**, **'Middle Office'**, or **'Back Office'**."
-                f"- The **Type** must strictly match the `{process_type}` provided ('Core' or 'Support')."
-                f"- Do not invent processes; base them strictly on standard industry practices for Enterprise Architecture in the specified domain and sub-vertical."
-                f"- If the domain/sub-vertical combination is not recognized or has no relevant processes for the specified type, return: {{'error': 'No relevant {process_type} capabilities found for {capability_name} in {domain}'}}\n"
-                f"\n\n## Output Format:\n"
-                f"Return the data as a valid JSON object matching the schema below. The output must be an array of process objects."
-                f"\n\n### JSON Schema:\n"
-                f"""
+            # Create conditional system prompt based on process_type
+            if process_type == 'subprocess':
+                system_prompt = (
+                    f"You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in breaking down business processes into detailed subprocesses."
+                    f"\n\n## Task:\n"
+                    f"Generate a **comprehensive list of detailed subprocesses** for the parent process **'{capability_name}'** (Description: {capability_description}) within the **{domain}** domain."
+                    f"\n\n## Input Variables:\n"
+                    f"- **domain**: {domain}\n"
+                    f"- **process_name**: {capability_name}\n"
+                    f"- **process_description**: {capability_description}\n"
+                    f"\n\n## Requirements:\n"
+                    f"- The list must be **comprehensive**, capturing all relevant, detailed subprocesses that make up the parent process. **Do not impose a limit on the number of subprocesses.**"
+                    f"- Each subprocess must have a **Name**, a **Category** (Front/Middle/Back Office), and a detailed **Description** of the specific activities."
+                    f"- The **Category** must be one of: **'Front Office'**, **'Middle Office'**, or **'Back Office'**."
+                    f"- Base subprocesses strictly on standard industry practices for the specified domain and process."
+                    f"- If the process cannot be broken down into meaningful subprocesses, return: {{'error': 'Unable to generate meaningful subprocesses for {capability_name} in {domain}'}}\n"
+                    f"\n\n## Output Format:\n"
+                    f"Return the data as a valid JSON object matching the schema below. The output must be an array of subprocess objects."
+                    f"\n\n### JSON Schema:\n"
+                    f"""
+                        {{
+                          "subprocesses": [
+                            {{
+                              "name": "string (detailed subprocess name)",
+                              "category": "string (Front Office | Middle Office | Back Office)",
+                              "description": "string (detailed description of subprocess activities)"
+                            }},
+                            // ... additional subprocess objects
+                          ]
+                        }}
+                    """
+                )
+            else:
+                system_prompt = (
+                    f"You are a Senior Enterprise Architect and Process Subject Matter Expert (SME) in the **{domain}** domain, specializing in classifying business capabilities."
+                    f"\n\n## Task:\n"
+                    f"Generate a **comprehensive list of high-level Business Capabilities (Processes)** for the sub-vertical **'{capability_name}'** within the **{domain}** domain. The processes must be categorized by their **Process Type** (Core or Support)."
+                    f"\n\n## Input Variables:\n"
+                    f"- **domain**: {domain}\n"
+                    f"- **subvertical_name**: {capability_name},{capability_description}\n"
+                    f"- **process_type_filter**: {process_type} (Filter: Only generate processes matching this type: 'Core' or 'Support')"
+                    f"\n\n## Requirements:\n"
+                    f"- The list must be **comprehensive**, capturing all relevant, high-level capabilities in the specified sub-vertical and matching the `{process_type}` filter. **Do not impose a limit on the number of processes.**"
+                    f"- Each capability must have a **Name** (Business Process), a **Category** (Front/Middle/Back Office), a **Type** (Core/Support), and a detailed **Description** (Activities and Description)."
+                    f"- The **Category** must be one of: **'Front Office'**, **'Middle Office'**, or **'Back Office'**."
+                    f"- The **Type** must strictly match the `{process_type}` provided ('Core' or 'Support')."
+                    f"- Do not invent processes; base them strictly on standard industry practices for Enterprise Architecture in the specified domain and sub-vertical."
+                    f"- If the domain/sub-vertical combination is not recognized or has no relevant processes for the specified type, return: {{'error': 'No relevant {process_type} capabilities found for {capability_name} in {domain}'}}\n"
+                    f"\n\n## Output Format:\n"
+                    f"Return the data as a valid JSON object matching the schema below. The output must be an array of process objects."
+                    f"\n\n### JSON Schema:\n"
+                    f"""
                         {{
                           "processes": [
                             {{
@@ -153,8 +191,8 @@ class GeminiClient:
                             // ... additional process objects
                           ]
                         }}
-                        """
-            )
+                    """
+                )
 
             # Create the model instance
             model = genai.GenerativeModel(

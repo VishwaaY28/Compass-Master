@@ -6,6 +6,7 @@ import Hero from './pages/Hero';
 import DashLayout from './layouts/DashLayout';
 import CompassMaster from './pages/compassMaster';
 import CompassView from './pages/compassView';
+import CompassChat from './pages/compassChat';
 import Error from './pages/Error';
 import ResearchAgent from './pages/researchAgent';
 
@@ -33,6 +34,11 @@ const router = createBrowserRouter([
       {
         path: 'research-agent',
         element: <ResearchAgent />,
+        errorElement: <Error />,
+      },
+      {
+        path: 'compass-chat',
+        element: <CompassChat />,
         errorElement: <Error />,
       },
       {

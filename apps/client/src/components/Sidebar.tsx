@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FiChevronLeft, FiChevronRight,FiEye, FiLogOut, FiHome, FiLayers, FiSettings, FiX } from 'react-icons/fi';
+import { FiChevronLeft, FiChevronRight,FiEye, FiLogOut, FiHome, FiLayers, FiSettings, FiX, FiMessageSquare } from 'react-icons/fi';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
@@ -27,6 +27,7 @@ const Sidebar: React.FC = () => {
   const navItems = [
     { label: 'Capability Master', path: '/dashboard', icon: FiHome },
     { label: 'Capability Compass', path: '/dashboard/research-agent', icon: FiLayers },
+    { label: 'Compass Chat', path: '/dashboard/compass-chat', icon: FiMessageSquare },
     { label: 'Compass View', path: '/dashboard/compass-view', icon: FiEye },
   ];
 
@@ -118,14 +119,14 @@ const Sidebar: React.FC = () => {
             <NavLink
               key={item.path}
               to={item.path}
-              className={`flex items-center gap-3 px-3 py-2 rounded-md transition-colors ${
+              className={`flex items-center ${collapsed ? 'justify-center' : 'justify-start'} gap-3 px-3 py-2 rounded-md transition-colors ${
                 isActive
                   ? 'bg-indigo-100 text-indigo-700 font-medium'
                   : 'text-gray-700 hover:bg-gray-100'
               }`}
               title={collapsed ? item.label : ''}
             >
-              <Icon size={20} />
+              <Icon size={20} className="flex-shrink-0 w-5 h-5" />
               {!collapsed && <span className="text-sm">{item.label}</span>}
             </NavLink>
           );
@@ -136,10 +137,10 @@ const Sidebar: React.FC = () => {
       <div className="p-4 border-t border-gray-200 space-y-2">
         <button
           onClick={() => setShowSettings(!showSettings)}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-gray-700 hover:bg-gray-100 transition-colors"
+          className={`w-full flex items-center ${collapsed ? 'justify-center' : 'justify-start'} gap-3 px-3 py-2 rounded-md text-gray-700 hover:bg-gray-100 transition-colors`}
           title={collapsed ? 'Settings' : ''}
         >
-          <FiSettings size={20} />
+          <FiSettings size={20} className="flex-shrink-0 w-5 h-5" />
           {!collapsed && <span className="text-sm">Settings</span>}
         </button>
 
@@ -270,10 +271,10 @@ const Sidebar: React.FC = () => {
 
         <button
           onClick={() => navigate('/')}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-gray-700 hover:bg-gray-100 transition-colors"
+          className={`w-full flex items-center ${collapsed ? 'justify-center' : 'justify-start'} gap-3 px-3 py-2 rounded-md text-gray-700 hover:bg-gray-100 transition-colors`}
           title={collapsed ? 'Logout' : ''}
         >
-          <FiLogOut size={20} />
+          <FiLogOut size={20} className="flex-shrink-0 w-5 h-5" />
           {!collapsed && <span className="text-sm">Exit</span>}
         </button>
       </div>

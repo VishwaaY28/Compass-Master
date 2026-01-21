@@ -18,8 +18,7 @@ export default function CompassView() {
 
   const { listDomains, listCapabilities, listProcesses } = useCapabilityApi();
 
-  // Helper function to truncate text at word boundary
-  const truncateAtWordBoundary = (text: string, maxWords: number = 20) => {
+  const truncateAtWordBoundary = (text: string, maxWords: number = 2) => {
     if (!text) return { truncated: '', full: '', shouldShowMore: false };
     
     const words = text.split(' ');
@@ -106,7 +105,8 @@ export default function CompassView() {
     if (!cap.processes || cap.processes.length === 0) {
       // Add capability with empty process row
       flattenedData.push({
-        domain: cap.domain || 'Unassigned',
+        vertical: cap.vertical || 'Unassigned',
+        subvertical: cap.subvertical || 'Unassigned',
         capabilityName: cap.name,
         capabilityDescription: cap.description,
         processName: '',
@@ -115,13 +115,19 @@ export default function CompassView() {
         processCategory: '',
         subprocessName: '',
         subprocessDescription: '',
+        subprocessData: '',
+        dataEntities: [],
+        dataElements: [],
+        subprocessApplication: '',
+        subprocessApi: '',
       });
     } else {
       // Add capability with each process
       cap.processes.forEach((proc: any) => {
         if (!proc.subprocesses || proc.subprocesses.length === 0) {
           flattenedData.push({
-            domain: cap.domain || 'Unassigned',
+            vertical: cap.vertical || 'Unassigned',
+            subvertical: cap.subvertical || 'Unassigned',
             capabilityName: cap.name,
             capabilityDescription: cap.description,
             processName: proc.name,
@@ -130,20 +136,48 @@ export default function CompassView() {
             processCategory: proc.category || '',
             subprocessName: '',
             subprocessDescription: '',
+            subprocessData: '',
+            dataEntities: [],
+            dataElements: [],
+            subprocessApplication: '',
+            subprocessApi: '',
           });
         } else {
           // Add each subprocess
           proc.subprocesses.forEach((subprocess: any) => {
+            const dataEntities = subprocess.data_entities || [];
+            const dataEntityNames = dataEntities.map((de: any) => de.data_entity_name).join(', ') || '';
+            
+            // Flatten data elements from all data entities
+            const allDataElements: any[] = [];
+            dataEntities.forEach((de: any) => {
+              if (de.data_elements && Array.isArray(de.data_elements)) {
+                de.data_elements.forEach((elem: any) => {
+                  allDataElements.push({
+                    name: elem.data_element_name,
+                    entityName: de.data_entity_name,
+                    description: elem.data_element_description
+                  });
+                });
+              }
+            });
+            
             flattenedData.push({
-              domain: cap.domain || 'Unassigned',
+              vertical: cap.vertical || 'Unassigned',
+              subvertical: cap.subvertical || 'Unassigned',
               capabilityName: cap.name,
               capabilityDescription: cap.description,
               processName: proc.name,
               processDescription: proc.description || '',
               processLevel: proc.level || '',
               processCategory: proc.category || '',
-              subprocessName: subprocess.name,
-              subprocessDescription: subprocess.description || '',
+              subprocessName: subprocess.name || subprocess.subprocess_name,
+              subprocessDescription: subprocess.description || subprocess.subprocess_description || '',
+              subprocessData: dataEntityNames,
+              dataEntities: dataEntities,
+              dataElements: allDataElements,
+              subprocessApplication: subprocess.application || subprocess.subprocess_application || '',
+              subprocessApi: subprocess.api || subprocess.subprocess_api || '',
             });
           });
         }
@@ -163,7 +197,8 @@ export default function CompassView() {
 
       // CSV headers
       const headers = [
-        'Domain',
+        'Vertical',
+        'Sub-Vertical',
         'Capability Name',
         'Capability Description',
         'Process Name',
@@ -171,7 +206,11 @@ export default function CompassView() {
         'Process Category',
         'Process Description',
         'Subprocess Name',
-        'Subprocess Description',
+        'Description',
+        'Data Entities',
+        'Data Elements',
+        'Application',
+        'API',
       ];
 
       // Escape CSV values
@@ -184,9 +223,13 @@ export default function CompassView() {
       };
 
       // Build CSV rows
-      const rows = flattenedData.map((row) =>
-        [
-          escapeCSV(row.domain),
+      const rows = flattenedData.map((row) => {
+        const dataElementsText = row.dataElements
+          .map((de: any) => `${de.name} (${de.entityName})`)
+          .join('; ');
+        return [
+          escapeCSV(row.vertical),
+          escapeCSV(row.subvertical),
           escapeCSV(row.capabilityName),
           escapeCSV(row.capabilityDescription),
           escapeCSV(row.processName),
@@ -195,8 +238,12 @@ export default function CompassView() {
           escapeCSV(row.processDescription),
           escapeCSV(row.subprocessName),
           escapeCSV(row.subprocessDescription),
-        ].join(',')
-      );
+          escapeCSV(row.subprocessData),
+          escapeCSV(dataElementsText),
+          escapeCSV(row.subprocessApplication),
+          escapeCSV(row.subprocessApi),
+        ].join(',');
+      });
 
       // Combine headers and rows
       const csv = [headers.join(','), ...rows].join('\n');
@@ -280,7 +327,8 @@ export default function CompassView() {
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="bg-gray-100 border-b-2 border-gray-300">
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Domain</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Vertical</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Sub-Vertical</th>
                     <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Capability Name</th>
                     <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Capability Description</th>
                     <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Process Name</th>
@@ -288,14 +336,24 @@ export default function CompassView() {
                     <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Process Category</th>
                     <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Process Description</th>
                     <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Subprocess Name</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Subprocess Description</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Description</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Data Entities</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Data Elements</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border-r border-gray-200">Application</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">API</th>
                   </tr>
                 </thead>
                 <tbody>
                   {paginatedData.map((row, idx) => {
-                  const capDescTruncated = truncateAtWordBoundary(row.capabilityDescription, 20);
-                  const procDescTruncated = truncateAtWordBoundary(row.processDescription, 20);
-                  const subprocDescTruncated = truncateAtWordBoundary(row.subprocessDescription, 20);
+                  const capDescTruncated = truncateAtWordBoundary(row.capabilityDescription, 2);
+                  const procDescTruncated = truncateAtWordBoundary(row.processDescription, 2);
+                  const subprocDescTruncated = truncateAtWordBoundary(row.subprocessDescription, 2);
+                  const dataEntitiesTruncated = truncateAtWordBoundary(row.subprocessData, 2);
+                  const dataElementsTruncated = row.dataElements && row.dataElements.length > 0
+                    ? truncateAtWordBoundary(row.dataElements.map((e: any) => `${e.name} (${e.entityName})`).join('; '), 2)
+                    : { truncated: '', full: '', shouldShowMore: false };
+                  const subprocAppTruncated = truncateAtWordBoundary(row.subprocessApplication, 2);
+                  const subprocApiTruncated = truncateAtWordBoundary(row.subprocessApi, 2);
 
                   return (
                     <tr
@@ -304,7 +362,12 @@ export default function CompassView() {
                     >
                       <td className="px-4 py-3 text-sm text-gray-700 border-r border-gray-200">
                         <span className="text-sm text-gray-900 font-medium">
-                          {row.domain}
+                          {row.vertical}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-700 border-r border-gray-200">
+                        <span className="text-sm text-gray-900 font-medium">
+                          {row.subvertical}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-900 font-medium border-r border-gray-200">{row.capabilityName}</td>
@@ -351,6 +414,62 @@ export default function CompassView() {
                         {subprocDescTruncated.shouldShowMore && (
                           <button
                             onClick={() => openDescriptionModal('Subprocess Description', subprocDescTruncated.full)}
+                            className="ml-2 text-blue-600 hover:text-blue-800 font-medium"
+                          >
+                            more
+                          </button>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-700 border-r border-gray-200">
+                        {row.subprocessData ? (
+                          <>
+                            <span className="line-clamp-2">{dataEntitiesTruncated.truncated}</span>
+                            {dataEntitiesTruncated.shouldShowMore && (
+                              <button
+                                onClick={() => openDescriptionModal('Data Entities', dataEntitiesTruncated.full)}
+                                className="ml-2 text-blue-600 hover:text-blue-800 font-medium"
+                              >
+                                more
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-700 border-r border-gray-200">
+                        {row.dataElements && row.dataElements.length > 0 ? (
+                          <>
+                            <span className="line-clamp-2 text-gray-900">{dataElementsTruncated.truncated}</span>
+                            {dataElementsTruncated.shouldShowMore && (
+                              <button
+                                onClick={() => openDescriptionModal('Data Elements', dataElementsTruncated.full)}
+                                className="ml-2 text-blue-600 hover:text-blue-800 font-medium"
+                              >
+                                more
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-700 border-r border-gray-200">
+                        <span className="line-clamp-2">{subprocAppTruncated.truncated}</span>
+                        {subprocAppTruncated.shouldShowMore && (
+                          <button
+                            onClick={() => openDescriptionModal('Subprocess Application', subprocAppTruncated.full)}
+                            className="ml-2 text-blue-600 hover:text-blue-800 font-medium"
+                          >
+                            more
+                          </button>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-700 border-r border-gray-200">
+                        <span className="line-clamp-2">{subprocApiTruncated.truncated}</span>
+                        {subprocApiTruncated.shouldShowMore && (
+                          <button
+                            onClick={() => openDescriptionModal('Subprocess API', subprocApiTruncated.full)}
                             className="ml-2 text-blue-600 hover:text-blue-800 font-medium"
                           >
                             more

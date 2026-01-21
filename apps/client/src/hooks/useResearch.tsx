@@ -9,6 +9,7 @@ export function useResearch() {
 	const research = async (query: string) => {
 		setIsLoading(true);
 		setError("");
+		console.log("[useResearch] Starting research for query:", query);
 		try {
 			const res = await fetch(
 				API.ENDPOINTS.CAPABILITIES.BASE_URL() + "/research",
@@ -18,10 +19,17 @@ export function useResearch() {
 					body: JSON.stringify({ query }),
 				}
 			);
+			console.log("[useResearch] Response status:", res.status);
+			
 			if (!res.ok) throw new Error("Failed to fetch research results");
 			const data = await res.json();
+			console.log("[useResearch] Response data:", data);
+			console.log("[useResearch] Data length:", data.length);
+			console.log("[useResearch] Data types:", data.map((item: any) => item.type || "unknown"));
+			
 			setResults(data);
 		} catch (err: any) {
+			console.error("[useResearch] Error:", err);
 			setError(err.message || "Unknown error");
 			setResults([]);
 		} finally {

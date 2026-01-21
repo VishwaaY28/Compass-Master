@@ -4,7 +4,7 @@ import { Toaster, toast } from 'react-hot-toast'
 
 
 import { useCapabilityApi } from '../hooks/useCapability';
-import type { Capability, Process, Domain } from '../hooks/useCapability';
+import type { Capability, Process, Vertical, SubVertical } from '../hooks/useCapability';
 import favicon from '../assets/favicon.png';
 
 // Domain to Sub-Vertical mapping
@@ -69,8 +69,10 @@ Return the data as a valid JSON object matching the schema below. The output mus
 }}`;
 
 export default function Home() {
-  const [domains, setDomains] = useState<Domain[]>([]);
-  const [selectedDomain, setSelectedDomain] = useState('');
+  const [verticals, setVerticals] = useState<Vertical[]>([]);
+  const [selectedVertical, setSelectedVertical] = useState('');
+  const [subverticals, setSubverticals] = useState<SubVertical[]>([]);
+  const [selectedSubVertical, setSelectedSubVertical] = useState('');
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -79,13 +81,13 @@ export default function Home() {
 
   const [formName, setFormName] = useState('');
   const [formDescription, setFormDescription] = useState('');
-  const [suggestedSubVerticals, setSuggestedSubVerticals] = useState<string[]>([]);
-  const [useCustomSubVertical, setUseCustomSubVertical] = useState(false);
 
   const {
-    listDomains,
+    listVerticals,
+    listSubVerticals,
     listCapabilities,
-    createDomain,
+    createVertical,
+    createSubVertical,
     createCapability,
     updateCapability,
     listProcesses,
@@ -97,8 +99,8 @@ export default function Home() {
     getPromptTemplate,
   } = useCapabilityApi();
 
-  const [newDomainName, setNewDomainName] = useState('');
-  const [isSavingDomain, setIsSavingDomain] = useState(false);
+  const [newVerticalName, setNewVerticalName] = useState('');
+  const [isSavingVertical, setIsSavingVertical] = useState(false);
 
   const loadedRef = useRef(false);
 
@@ -119,13 +121,40 @@ export default function Home() {
     };
   }, []);
 
+  // Load sub-verticals when a vertical is selected
+  useEffect(() => {
+    async function loadSubVerticals() {
+      if (!selectedVertical) {
+        setSubverticals([]);
+        return;
+      }
+      try {
+        // Use the API's filtering by verticalId
+        const subs = await listSubVerticals(Number(selectedVertical));
+        console.log('[DEBUG] Loaded subverticals:', subs);
+        setSubverticals(subs);
+      } catch (e) {
+        console.error('Failed to load sub-verticals:', e);
+        setSubverticals([]);
+      }
+    }
+    loadSubVerticals();
+  }, [selectedVertical]);
+
   useEffect(() => {
     if (loadedRef.current) return;
     loadedRef.current = true;
     async function load() {
       try {
-        const doms = await listDomains();
-        setDomains(doms);
+        const verts = await listVerticals();
+        setVerticals(verts);
+        
+        // Load sub-verticals for the selected vertical
+        if (selectedVertical) {
+          const subs = await listSubVerticals();
+          const filtered = subs.filter((sv: any) => String(sv.vertical_id || sv.vertical?.id) === selectedVertical);
+          setSubverticals(filtered);
+        }
         
         const caps = await listCapabilities();
 
@@ -155,23 +184,15 @@ export default function Home() {
       }
     }
     load();
-  }, [listCapabilities, listProcesses]);
+  }, [listCapabilities, listProcesses, listVerticals]);
 
   function openAddModal() {
     setModalMode('add');
     setEditingId(null);
     setFormName('');
     setFormDescription('');
-    setUseCustomSubVertical(false);
     
-    // Get suggested sub-verticals based on selected domain
-    const selectedDomainObj = domains.find((d) => String(d.id) === selectedDomain);
-    const domainName = selectedDomainObj?.name;
-    if (domainName && DOMAIN_SUBVERTICAL_MAP[domainName]) {
-      setSuggestedSubVerticals(DOMAIN_SUBVERTICAL_MAP[domainName]);
-    } else {
-      setSuggestedSubVerticals([]);
-    }
+    console.log('[DEBUG] openAddModal - selectedSubVertical:', selectedSubVertical);
     
     setIsModalOpen(true);
   }
@@ -195,16 +216,22 @@ export default function Home() {
   async function saveCapability() {
     try {
       if (modalMode === 'add') {
+        if (!selectedSubVertical || !formName.trim()) {
+          toast.error('Please select a sub-vertical and enter a capability name');
+          return;
+        }
+
         const newCap = await createCapability({
-          domain: selectedDomain,
+          subvertical: selectedSubVertical,
           name: formName,
           description: formDescription,
         });
         
-        const domainName =
-          (newCap as any).domain || domains.find((d) => String(d.id) === String(selectedDomain))?.name || selectedDomain;
+        const selectedSV = subverticals.find((sv: any) => String(sv.id) === selectedSubVertical);
+        const subverticalName = selectedSV?.name || selectedSubVertical;
+        
         setCapabilities((s) => [
-          { ...newCap, domain: domainName, processes: [] },
+          { ...newCap, subvertical: subverticalName, processes: [] },
           ...s,
         ]);
         toast.success('Successfully added capability');
@@ -219,29 +246,30 @@ export default function Home() {
         toast.success('Successfully updated capability');
       }
     } catch (e) {
+      console.error(e);
       toast.error('Failed to save capability');
     }
     setIsModalOpen(false);
   }
 
-  async function handleCreateDomain() {
-    const name = newDomainName.trim();
+  async function handleCreateVertical() {
+    const name = newVerticalName.trim();
     if (!name) {
-      toast.error('Enter a domain name');
+      toast.error('Enter a vertical name');
       return;
     }
     try {
-      setIsSavingDomain(true);
-      const created = await createDomain({ name });
-      setDomains((s) => [...s, created]);
-      setSelectedDomain(String((created as any).id));
-      setNewDomainName('');
-      toast.success('Domain created successfully');
+      setIsSavingVertical(true);
+      const created = await createVertical({ name });
+      setVerticals((s) => [...s, created]);
+      setSelectedVertical(String((created as any).id));
+      setNewVerticalName('');
+      toast.success('Vertical created successfully');
     } catch (e) {
       console.error(e);
-      toast.error('Failed to create domain');
+      toast.error('Failed to create vertical');
     } finally {
-      setIsSavingDomain(false);
+      setIsSavingVertical(false);
     }
   }
 
@@ -430,11 +458,11 @@ export default function Home() {
         return;
       }
 
-      const result = await generateProcesses(parentProcess.name, subprocessParentCapId, parentCapability.domain || '', 'subprocess', parentProcess.description || '', 
+      const result = await generateProcesses(parentProcess.name, subprocessParentCapId, parentCapability.subvertical || '', 'subprocess', parentProcess.description || '', 
         aiSubprocessPrompt
           .replace('{process_name}', parentProcess.name)
           .replace('{process_description}', parentProcess.description || '')
-          .replace('{domain}', parentCapability.domain || '')
+          .replace('{domain}', parentCapability.subvertical || '')
       );
 
       if (result.status === 'success') {
@@ -490,7 +518,7 @@ export default function Home() {
         return;
       }
 
-      const result = await generateProcesses(parentCapability.name, processCapId, parentCapability.domain || '', processLevel, parentCapability.description || '', aiPrompt);
+      const result = await generateProcesses(parentCapability.name, processCapId, parentCapability.subvertical || '', processLevel, parentCapability.description || '', aiPrompt);
 
       if (result.status === 'success') {
         const created = result.processes || [];
@@ -672,7 +700,7 @@ export default function Home() {
             createdProcs.push(created);
           } else {
             // Use createProcess for process creation
-            const processPayload = {
+            const processPayload: any = {
               name: p.name,
               level: p.level,
               description: p.description || '',
@@ -751,9 +779,9 @@ export default function Home() {
 
 
   const parentCap = capabilities.find((c) => c.id === processCapId);
-  const selectedDomainName = domains.find((d) => String(d.id) === selectedDomain)?.name;
+  const selectedVerticalName = verticals.find((v) => String(v.id) === selectedVertical)?.name;
   const currentCap = editingId != null ? capabilities.find((c) => c.id === editingId) : undefined;
-  const capDomainName = currentCap?.domain ?? selectedDomainName;
+  const capSubVerticalName = currentCap?.subvertical ?? selectedVerticalName;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -798,44 +826,61 @@ export default function Home() {
 
         <div className="flex items-center gap-4 mb-6">
           <div className="flex items-center gap-3">
-            {domains.length === 0 ? (
+            {verticals.length === 0 ? (
               <div className="flex items-center gap-2">
                 <input
                   className="border rounded-md px-3 py-2 bg-white text-sm text-gray-700 focus:ring-2 focus:ring-indigo-200 w-48"
-                  placeholder="Enter domain name"
-                  value={newDomainName}
-                  onChange={(e) => setNewDomainName(e.target.value)}
+                  placeholder="Enter vertical name"
+                  value={newVerticalName}
+                  onChange={(e) => setNewVerticalName(e.target.value)}
                 />
                 <button
-                  className={`px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap ${newDomainName.trim() ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
-                  disabled={!newDomainName.trim() || isSavingDomain}
-                  onClick={handleCreateDomain}
+                  className={`px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap ${newVerticalName.trim() ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+                  disabled={!newVerticalName.trim() || isSavingVertical}
+                  onClick={handleCreateVertical}
                 >
-                  {isSavingDomain ? 'Saving...' : 'Add Domain'}
+                  {isSavingVertical ? 'Saving...' : 'Add Vertical'}
                 </button>
               </div>
             ) : (
-              <select
-                className="border rounded-md px-3 py-2 bg-white text-sm text-gray-700 focus:ring-2 focus:ring-indigo-200 w-48"
-                value={selectedDomain}
-                onChange={(e) => setSelectedDomain(e.target.value)}
-              >
-                <option value="">Select Domain</option>
-                {domains.map((domain) => (
-                  <option key={domain.id} value={String(domain.id)}>
-                    {domain.name}
-                  </option>
-                ))}
-              </select>
+              <>
+                <select
+                  className="border rounded-md px-3 py-2 bg-white text-sm text-gray-700 focus:ring-2 focus:ring-indigo-200 w-48"
+                  value={selectedVertical}
+                  onChange={(e) => setSelectedVertical(e.target.value)}
+                >
+                  <option value="">Select Vertical</option>
+                  {verticals.map((vertical) => (
+                    <option key={vertical.id} value={String(vertical.id)}>
+                      {vertical.name}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Sub-Vertical Dropdown */}
+                <select
+                  className={`border rounded-md px-3 py-2 bg-white text-sm text-gray-700 focus:ring-2 focus:ring-indigo-200 w-48 ${!selectedVertical ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  value={selectedSubVertical}
+                  onChange={(e) => setSelectedSubVertical(e.target.value)}
+                  disabled={!selectedVertical}
+                >
+                  <option value="">Select Sub-Vertical</option>
+                  {subverticals.map((subVertical: any) => (
+                    <option key={subVertical.id} value={String(subVertical.id)}>
+                      {subVertical.name}
+                    </option>
+                  ))}
+                </select>
+              </>
             )}
           </div>
 
           <button
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${selectedDomain ? 'bg-gray-100 border border-primary text-indigo-600 hover:bg-indigo-700 hover:text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
-            disabled={!selectedDomain}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${selectedSubVertical ? 'bg-gray-100 border border-primary text-indigo-600 hover:bg-indigo-700 hover:text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+            disabled={!selectedSubVertical}
             onClick={openAddModal}
           >
-            Add sub-vertical
+            Add Capability
           </button>
         </div>
 
@@ -864,7 +909,7 @@ export default function Home() {
                           <div>
                             <div className="text-lg font-semibold text-gray-900">{c.name}</div>
                             <div className="mt-1">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700">{c.domain ?? 'Unassigned'}</span>
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700">{c.subvertical ?? 'Unassigned'}</span>
                             </div>
                             <div className="mt-3 text-sm text-gray-600">{c.description}</div>
                           </div>
@@ -989,7 +1034,25 @@ export default function Home() {
 
                                       {isSubprocessesExpanded && (
                                         <ul className="divide-y divide-gray-200 bg-indigo-50">
-                                          {subprocesses.map((sub: any) => (
+                                          {subprocesses.map((sub: any) => {
+                                            const dataEntities = sub.data_entities || [];
+                                            const dataEntityNames = dataEntities.map((de: any) => de.data_entity_name).join(', ') || '';
+                                            
+                                            // Flatten data elements from all data entities
+                                            const allDataElements: any[] = [];
+                                            dataEntities.forEach((de: any) => {
+                                              if (de.data_elements && Array.isArray(de.data_elements)) {
+                                                de.data_elements.forEach((elem: any) => {
+                                                  allDataElements.push({
+                                                    name: elem.data_element_name,
+                                                    entityName: de.data_entity_name,
+                                                    description: elem.data_element_description
+                                                  });
+                                                });
+                                              }
+                                            });
+                                            
+                                            return (
                                             <li
                                               key={sub.id}
                                               className="px-4 py-3 hover:bg-indigo-100 transition-colors"
@@ -1011,6 +1074,24 @@ export default function Home() {
                                                       )}
                                                     </div>
                                                     {sub.description && <p className="text-xs text-gray-600 mt-2">{sub.description}</p>}
+                                                    {dataEntityNames && (
+                                                      <div className="mt-3 pt-3 border-t border-indigo-200">
+                                                        <p className="text-xs font-semibold text-gray-700 mb-1">Data Entities:</p>
+                                                        <p className="text-xs text-gray-600 whitespace-pre-wrap break-words">{dataEntityNames}</p>
+                                                      </div>
+                                                    )}
+                                                    {allDataElements.length > 0 && (
+                                                      <div className="mt-3 pt-3 border-t border-indigo-200">
+                                                        <p className="text-xs font-semibold text-gray-700 mb-1">Data Elements:</p>
+                                                        <div className="space-y-1">
+                                                          {allDataElements.map((elem: any, elemIdx: number) => (
+                                                            <p key={elemIdx} className="text-xs text-gray-600">
+                                                              {elem.name} ({elem.entityName})
+                                                            </p>
+                                                          ))}
+                                                        </div>
+                                                      </div>
+                                                    )}
                                                   </div>
                                                 </div>
 
@@ -1023,7 +1104,8 @@ export default function Home() {
                                                 </button>
                                               </div>
                                             </li>
-                                          ))}
+                                            );
+                                          })}
                                         </ul>
                                       )}
                                     </>
@@ -1050,77 +1132,30 @@ export default function Home() {
             <div className="border-b border-gray-100 px-6 py-3 bg-gray-50 flex items-center gap-3">
               <FiEdit3 className="w-5 h-5 text-blue-600" />
               <h2 className="text-lg font-bold text-gray-900">
-                {modalMode === 'view' ? 'View capability' : modalMode === 'edit' ? 'Edit capability' : 'Add sub-vertical'}
+                {modalMode === 'view' ? 'View capability' : modalMode === 'edit' ? 'Edit capability' : 'Add Capability'}
               </h2>
-              {capDomainName && <span className="text-xs text-gray-400 ml-2">to {capDomainName}</span>}
             </div>
 
             <div className="p-6">
-              {/* Show sub-vertical dropdown in add mode */}
-              {modalMode === 'add' && suggestedSubVerticals.length > 0 && !useCustomSubVertical && (
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Select Sub-Vertical</label>
-                  <select
-                    className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    value={formName}
-                    onChange={(e) => {
-                      setFormName(e.target.value);
-                      setFormDescription('');
-                    }}
-                  >
-                    <option value="">-- Select a sub-vertical --</option>
-                    {suggestedSubVerticals.map((subVertical) => (
-                      <option key={subVertical} value={subVertical}>
-                        {subVertical}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => setUseCustomSubVertical(true)}
-                    className="mt-2 text-sm text-indigo-600 hover:text-indigo-700 font-medium"
-                  >
-                    Use custom name instead
-                  </button>
-                </div>
-              )}
-
-              {/* Show custom input when user chooses to use custom or in edit/view mode */}
-              {(modalMode !== 'add' || useCustomSubVertical) && (
-                <>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Name</label>
-                  <input
-                    className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    placeholder="Enter sub-vertical name..."
-                    value={formName}
-                    onChange={(e) => setFormName(e.target.value)}
-                    disabled={modalMode === 'view'}
-                  />
-                </>
-              )}
-
-              {/* Back button to view suggestions again */}
-              {modalMode === 'add' && useCustomSubVertical && suggestedSubVerticals.length > 0 && (
-                <button
-                  onClick={() => {
-                    setUseCustomSubVertical(false);
-                    setFormName('');
-                    setFormDescription('');
-                  }}
-                  className="text-sm text-indigo-600 hover:text-indigo-700 font-medium mb-4"
-                >
-                  ← Back to suggestions
-                </button>
-              )}
+              <label className="block text-sm font-medium text-gray-700 mb-2">Capability Name</label>
+              <input
+                className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                placeholder="Enter capability name..."
+                value={formName}
+                onChange={(e) => setFormName(e.target.value)}
+                disabled={modalMode === 'view'}
+              />
 
               <label className="block text-sm font-medium text-gray-700 mb-2 mt-4">Description</label>
-                <textarea
-                  className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[100px] resize-y"
-                placeholder="Enter sub-vertical description..."
-                  rows={4}
-                  value={formDescription}
-                  onChange={(e) => setFormDescription(e.target.value)}
-                  disabled={modalMode === 'view'}
-                />
+              <textarea
+                className="w-full bg-gray-50 border border-indigo-100 rounded-xl px-4 py-3 text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[100px] resize-y"
+                placeholder="Enter capability description..."
+                rows={4}
+                value={formDescription}
+                onChange={(e) => setFormDescription(e.target.value)}
+                disabled={modalMode === 'view'}
+              />
+
               <div className="flex justify-end gap-3 mt-6">
                 <button
                   className="px-3 py-1.5 rounded-md text-gray-600 hover:bg-gray-100 font-medium"
@@ -1130,18 +1165,18 @@ export default function Home() {
                     setFormDescription('')
                   }}
                 >
-                Cancel
-              </button>
-              {modalMode !== 'view' && (
-                <button
-                  className="px-4 py-1.5 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                  onClick={saveCapability}
-                  disabled={!formName.trim()}
-                >
-                  <FiPlus className="w-4 h-4" />
-                    {modalMode === 'edit' ? 'Save changes' : 'Add sub-vertical'}
+                  Cancel
                 </button>
-              )}
+                {modalMode !== 'view' && (
+                  <button
+                    className="px-4 py-1.5 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    onClick={saveCapability}
+                    disabled={!formName.trim()}
+                  >
+                    <FiPlus className="w-4 h-4" />
+                    {modalMode === 'edit' ? 'Save changes' : 'Add Capability'}
+                  </button>
+                )}
               </div>
             </div>
           </div>
