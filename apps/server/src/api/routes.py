@@ -37,8 +37,6 @@ class ResearchRequest(BaseModel):
 class CompassChatRequest(BaseModel):
     query: str
     vertical: str  # Selected vertical for context
-    temperature: Optional[float] = 0.7
-    max_tokens: Optional[int] = 2000
 
 @router.post("/capabilities/research")
 async def research_capabilities(payload: ResearchRequest):
@@ -266,6 +264,35 @@ async def research_capabilities(payload: ResearchRequest):
                         logger.warning(f"[Research] Process {process.id} has no capability")
                         continue
                     
+                    # Fetch data entities and elements for the subprocess
+                    try:
+                        data_entities = await subprocess.data_entities.all()
+                    except Exception:
+                        data_entities = []
+                    
+                    # Build two structures: data_entities (for display) and flat data_elements (for frontend)
+                    entities_list = []
+                    flat_elements = []
+                    
+                    for de in data_entities:
+                        try:
+                            data_elements = await de.data_elements.all()
+                        except Exception:
+                            data_elements = []
+                        
+                        entities_list.append({
+                            "data_entity_name": de.name,
+                            "data_entity_description": de.description,
+                        })
+                        
+                        for elem in data_elements:
+                            flat_elements.append({
+                                "id": elem.id,
+                                "name": elem.name,
+                                "entityName": de.name,
+                                "description": elem.description,
+                            })
+                    
                     result.append({
                         "id": subprocess.id,
                         "name": subprocess.name,
@@ -275,6 +302,8 @@ async def research_capabilities(payload: ResearchRequest):
                         "data": getattr(subprocess, "data", None),
                         "application": getattr(subprocess, "application", None),
                         "api": getattr(subprocess, "api", None),
+                        "data_entities": entities_list,
+                        "data_elements": flat_elements,
                         "parent_process": {
                             "id": process.id,
                             "name": process.name,
@@ -311,8 +340,38 @@ async def research_capabilities(payload: ResearchRequest):
                     except Exception:
                         subprocs = []
 
-                    subprocess_list = [
-                        {
+                    subprocess_list = []
+                    for sp in subprocs:
+                        # Fetch data entities and elements for each subprocess
+                        try:
+                            data_entities = await sp.data_entities.all()
+                        except Exception:
+                            data_entities = []
+                        
+                        # Build two structures: data_entities (for display) and flat data_elements (for frontend)
+                        entities_list = []
+                        flat_elements = []
+                        
+                        for de in data_entities:
+                            try:
+                                data_elements = await de.data_elements.all()
+                            except Exception:
+                                data_elements = []
+                            
+                            entities_list.append({
+                                "data_entity_name": de.name,
+                                "data_entity_description": de.description,
+                            })
+                            
+                            for elem in data_elements:
+                                flat_elements.append({
+                                    "id": elem.id,
+                                    "name": elem.name,
+                                    "entityName": de.name,
+                                    "description": elem.description,
+                                })
+                        
+                        subprocess_list.append({
                             "id": sp.id,
                             "name": sp.name,
                             "description": sp.description,
@@ -320,9 +379,9 @@ async def research_capabilities(payload: ResearchRequest):
                             "data": getattr(sp, "data", None),
                             "application": getattr(sp, "application", None),
                             "api": getattr(sp, "api", None),
-                        }
-                        for sp in subprocs
-                    ]
+                            "data_entities": entities_list,
+                            "data_elements": flat_elements,
+                        })
 
                     result.append({
                         "id": process.id,
@@ -344,25 +403,25 @@ async def research_capabilities(payload: ResearchRequest):
 
         else:
             # Default: Return capability-level matches with full structure
-            logger.info(f"[Research] No specific matches found, returning matching capabilities or all capabilities")
+            logger.info(f"[Research] No specific matches found, trying to match capabilities by ID or name")
             
             matched_capabilities = []
             
             # Try to match by ID first if we have matching_items
             if matching_items and len(matching_items) > 0:
                 matching_ids = [item.get("id") for item in matching_items]
-                matched_capabilities = [c for c in capabilities if c.id in matching_ids]
+                matched_capabilities = [c for c in filtered_capabilities if c.id in matching_ids]
                 logger.info(f"[Research] Found {len(matched_capabilities)} matching capabilities by ID")
             
             # If no ID matches, try name matching
-            if len(matched_capabilities) == 0 and query and len(capabilities) > 0:
+            if len(matched_capabilities) == 0 and query and len(filtered_capabilities) > 0:
                 logger.info(f"[Research] No ID matches found, trying name-based matching")
                 query_lower = query.lower()
                 query_words = query_lower.split()
                 
                 # Match if any query word appears in capability name or description
                 name_matched = []
-                for c in capabilities:
+                for c in filtered_capabilities:
                     cap_name_lower = c.name.lower()
                     cap_desc_lower = c.description.lower() if c.description else ""
                     
@@ -376,10 +435,11 @@ async def research_capabilities(payload: ResearchRequest):
                     matched_capabilities = name_matched
                     logger.info(f"[Research] Name-matched {len(matched_capabilities)} capabilities")
             
-            # Final fallback: return all capabilities if database has data
+            # If still no matches, return empty result instead of all capabilities
             if len(matched_capabilities) == 0:
-                logger.info(f"[Research] No name matches either, falling back to all {len(capabilities)} capabilities")
-                matched_capabilities = capabilities
+                logger.info(f"[Research] No matching capabilities found for query: {query}")
+                # Return empty result - do not fallback to all capabilities
+                matched_capabilities = []
 
             for cap in matched_capabilities:
                 try:
@@ -394,8 +454,38 @@ async def research_capabilities(payload: ResearchRequest):
                     except Exception:
                         subprocs = []
 
-                    subprocess_list = [
-                        {
+                    subprocess_list = []
+                    for sp in subprocs:
+                        # Fetch data entities and elements for each subprocess
+                        try:
+                            data_entities = await sp.data_entities.all()
+                        except Exception:
+                            data_entities = []
+                        
+                        # Build two structures: data_entities (for display) and flat data_elements (for frontend)
+                        entities_list = []
+                        flat_elements = []
+                        
+                        for de in data_entities:
+                            try:
+                                data_elements = await de.data_elements.all()
+                            except Exception:
+                                data_elements = []
+                            
+                            entities_list.append({
+                                "data_entity_name": de.name,
+                                "data_entity_description": de.description,
+                            })
+                            
+                            for elem in data_elements:
+                                flat_elements.append({
+                                    "id": elem.id,
+                                    "name": elem.name,
+                                    "entityName": de.name,
+                                    "description": elem.description,
+                                })
+                        
+                        subprocess_list.append({
                             "id": sp.id,
                             "name": sp.name,
                             "description": sp.description,
@@ -403,9 +493,9 @@ async def research_capabilities(payload: ResearchRequest):
                             "data": getattr(sp, "data", None),
                             "application": getattr(sp, "application", None),
                             "api": getattr(sp, "api", None),
-                        }
-                        for sp in subprocs
-                    ]
+                            "data_entities": entities_list,
+                            "data_elements": flat_elements,
+                        })
 
                     proc_list.append({
                         "id": proc.id,
@@ -937,12 +1027,103 @@ async def list_capabilities():
     return JSONResponse(result)
 
 
-@router.get("/capabilities/{capability_id}", response_model=Capability_Pydantic)
+@router.get("/capabilities/{capability_id}")
 async def get_capability(capability_id: int):
+    """
+    Get a specific capability with full hierarchical data including processes,
+    subprocesses, data entities, and data elements.
+    """
     obj = await capability_repository.fetch_by_id(capability_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Capability not found")
-    return await Capability_Pydantic.from_tortoise_orm(obj)
+    
+    # Fetch processes for this capability
+    try:
+        procs = await obj.processes.all()
+    except Exception:
+        procs = []
+    
+    proc_list = []
+    for p in procs:
+        level = getattr(p.level, 'value', p.level)
+        
+        # Fetch subprocesses for this process
+        try:
+            subprocs = await p.subprocesses.all()
+        except Exception:
+            subprocs = []
+        
+        subprocess_list = []
+        for sp in subprocs:
+            try:
+                data_entities = await sp.data_entities.all()
+            except Exception:
+                data_entities = []
+            
+            # Fetch data elements for each data entity
+            entities_with_elements = []
+            for de in data_entities:
+                try:
+                    data_elements = await de.data_elements.all()
+                except Exception:
+                    data_elements = []
+                
+                entities_with_elements.append({
+                    "data_entity_id": de.id,
+                    "data_entity_name": de.name,
+                    "data_entity_description": de.description,
+                    "data_elements": [
+                        {
+                            "data_element_id": elem.id,
+                            "data_element_name": elem.name,
+                            "data_element_description": elem.description,
+                        }
+                        for elem in data_elements
+                    ]
+                })
+            
+            subprocess_list.append({
+                "id": sp.id,
+                "name": sp.name,
+                "description": sp.description,
+                "category": sp.category,
+                "data_entities": entities_with_elements,
+                "application": getattr(sp, "application", None),
+                "api": getattr(sp, "api", None),
+            })
+        
+        proc_list.append({
+            "id": p.id,
+            "name": p.name,
+            "level": level,
+            "description": p.description,
+            "category": p.category,
+            "subprocesses": subprocess_list,
+        })
+    
+    # Fetch vertical through subvertical relationship
+    subvertical_name = None
+    vertical_name = None
+    if getattr(obj, 'subvertical', None):
+        subvertical_name = obj.subvertical.name
+        try:
+            # Fetch the related vertical
+            vertical = await obj.subvertical.vertical
+            if vertical:
+                vertical_name = vertical.name
+        except Exception:
+            vertical_name = None
+    
+    result = {
+        "id": obj.id,
+        "name": obj.name,
+        "description": obj.description,
+        "vertical": vertical_name,
+        "subvertical": subvertical_name,
+        "processes": proc_list,
+    }
+    
+    return JSONResponse(result)
 
 
 @router.put("/capabilities/{capability_id}", response_model=Capability_Pydantic)
@@ -1011,15 +1192,90 @@ async def create_process(payload: ProcessCreateRequest):
     return JSONResponse(result)
 
 
-@router.get("/processes", response_model=List[Process_Pydantic])
+@router.get("/processes")
 async def list_processes(capability_id: Optional[int] = Query(None, alias="capability_id")):
-
-    prots = await process_repository.list_processes(capability_id)
-
-    try:
-        return await Process_Pydantic.from_queryset(ProcessModel.filter(deleted_at=None) if capability_id is None else ProcessModel.filter(deleted_at=None, capability_id=capability_id))
-    except Exception:
-        return [await Process_Pydantic.from_tortoise_orm(p) for p in prots]
+    """
+    Get all processes with full hierarchical data including subprocesses, 
+    data entities, and data elements.
+    """
+    # Fetch processes based on capability_id filter
+    if capability_id is None:
+        processes = await ProcessModel.filter(deleted_at=None).all()
+    else:
+        processes = await ProcessModel.filter(deleted_at=None, capability_id=capability_id).all()
+    
+    result = []
+    
+    for proc in processes:
+        # Fetch capability info
+        capability = None
+        try:
+            capability = await proc.capability
+        except Exception:
+            capability = None
+        
+        # Fetch all subprocesses
+        try:
+            subprocs = await proc.subprocesses.all()
+        except Exception:
+            subprocs = []
+        
+        # Build subprocess list with data entities and elements
+        subprocess_list = []
+        for sp in subprocs:
+            try:
+                data_entities = await sp.data_entities.all()
+            except Exception:
+                data_entities = []
+            
+            # Fetch data elements for each data entity
+            entities_with_elements = []
+            for de in data_entities:
+                try:
+                    data_elements = await de.data_elements.all()
+                except Exception:
+                    data_elements = []
+                
+                entities_with_elements.append({
+                    "data_entity_id": de.id,
+                    "data_entity_name": de.name,
+                    "data_entity_description": de.description,
+                    "data_elements": [
+                        {
+                            "data_element_id": elem.id,
+                            "data_element_name": elem.name,
+                            "data_element_description": elem.description,
+                        }
+                        for elem in data_elements
+                    ]
+                })
+            
+            subprocess_list.append({
+                "id": sp.id,
+                "name": sp.name,
+                "description": sp.description,
+                "category": sp.category,
+                "data": getattr(sp, "data", None),
+                "application": getattr(sp, "application", None),
+                "api": getattr(sp, "api", None),
+                "data_entities": entities_with_elements,
+            })
+        
+        # Get process level
+        level = getattr(proc.level, 'value', proc.level)
+        
+        result.append({
+            "id": proc.id,
+            "name": proc.name,
+            "level": level,
+            "description": proc.description,
+            "category": proc.category,
+            "capability_id": proc.capability_id,
+            "capability_name": capability.name if capability else None,
+            "subprocesses": subprocess_list,
+        })
+    
+    return JSONResponse(result)
 
 
 @router.get("/processes/{process_id}", response_model=Process_Pydantic)
@@ -1269,8 +1525,6 @@ async def compass_chat(payload: CompassChatRequest):
             query=query,
             vertical=vertical_name,
             vertical_data=vertical_data,
-            temperature=payload.temperature,
-            max_tokens=payload.max_tokens,
         )
 
         logger.info(f"[CompassChat] Analysis complete")
@@ -1296,8 +1550,6 @@ async def compass_chat(payload: CompassChatRequest):
 async def compass_chat_stream(
     query: str = Query(...),
     vertical: str = Query(...),
-    temperature: float = Query(0.2),
-    max_tokens: int = Query(2000),
 ):
     """
     Streaming version of Compass Chat - streams thinking and result progressively.
@@ -1321,8 +1573,6 @@ async def compass_chat_stream(
                     query=query,
                     vertical=vertical,
                     vertical_data=vertical_data,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
                 ):
                     # Send JSON-formatted chunks
                     chunk = {
@@ -1365,8 +1615,6 @@ async def compass_chat_independent(payload: CompassChatRequest):
         thinking, result = azure_openai_independent_client.think_and_analyze(
             query=query,
             vertical=vertical_name,
-            temperature=payload.temperature,
-            max_tokens=payload.max_tokens,
         )
 
         logger.info(f"[CompassChat Independent] Analysis complete")

@@ -42,7 +42,7 @@ async def get_all_settings_dict() -> Dict[str, Any]:
     # Return defaults if no settings exist
     return {
         "provider": "azure",
-        "vaultName": "https://fstoazuregpt5.vault.azure.net/",
+        "vaultName": "https://fstodevazureopenai.vault.azure.net/",
         "temperature": 0.5,
         "topP": 0.9,
     }

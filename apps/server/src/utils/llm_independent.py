@@ -45,8 +45,8 @@ class AzureOpenAIIndependentClient:
                 # Retrieve secrets from Key Vault
                 api_key = kv_client.get_secret("llm-api-key").value
                 endpoint = kv_client.get_secret("llm-base-endpoint").value
-                deployment = kv_client.get_secret("llm-41").value
-                api_version = kv_client.get_secret("llm-41-version").value
+                deployment = kv_client.get_secret("llm-mini").value
+                api_version = kv_client.get_secret("llm-mini-version").value
                 
                 # Strip whitespace from all values
                 api_key = api_key.strip() if api_key else None
@@ -107,8 +107,6 @@ class AzureOpenAIIndependentClient:
         self,
         query: str,
         vertical: str,
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
     ) -> Tuple[str, str]:
         """
         Use Azure OpenAI LLM to think through a query WITHOUT database context.
@@ -117,8 +115,6 @@ class AzureOpenAIIndependentClient:
         Args:
             query: User's query/question
             vertical: Selected vertical/domain (for context only, not data)
-            temperature: LLM temperature (0-1)
-            max_tokens: Maximum tokens for response
 
         Returns:
             Tuple of (thinking_process, final_result)
@@ -140,13 +136,12 @@ class AzureOpenAIIndependentClient:
             try:
                 response = client.chat.completions.create(
                     model=deployment,
+
+                    reasoning_effort="high",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_message},
                     ],
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    top_p=0.2,
                 )
             except Exception as api_error:
                 logger.error(f"Azure API Error - Deployment: {deployment}, Error: {str(api_error)}")
@@ -169,8 +164,6 @@ class AzureOpenAIIndependentClient:
         self,
         query: str,
         vertical: str,
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
     ):
         """
         Stream the thinking process and analysis result WITHOUT database context.
@@ -179,8 +172,6 @@ class AzureOpenAIIndependentClient:
         Args:
             query: User's query/question
             vertical: Selected vertical/domain (for context only, not data)
-            temperature: LLM temperature (0-1)
-            max_tokens: Maximum tokens for response
 
         Yields:
             Tuple of (chunk_type, content) where chunk_type is 'thinking' or 'result'
@@ -198,13 +189,12 @@ class AzureOpenAIIndependentClient:
             try:
                 stream = client.chat.completions.create(
                     model=deployment,
+
+                    reasoning_effort="high",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_message},
                     ],
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    top_p=0.7,
                     stream=True,
                 )
             except Exception as api_error:
@@ -269,16 +259,18 @@ class AzureOpenAIIndependentClient:
 
 Your task is to:
 1. First, think through the user's query step by step
-2. Analyze the relevant capabilities and processes for the {vertical} domain
+2. Analyze the relevant capabilities and processes using any reliable external resources
 3. Identify the most relevant matches to the user's intent
-4. Provide comprehensive insights based on your expertise
+4. Provide comprehensive insights based on all available information
+
+If data is not available from any source, explicitly state "This information is not available."
 
 Structure your response as:
 <thinking>
-[Your step-by-step reasoning process]
+[Your step-by-step reasoning process - reference reputable external sources]
 </thinking>
 
-[Your final analysis and recommendations]
+[Your final analysis and recommendations - cite specific entities and elements from your sources]
 
 Be thorough in your thinking but concise in your final answer."""
 
