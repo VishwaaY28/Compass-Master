@@ -37,7 +37,7 @@ class GeminiClient:
     def _load_config(self):
         """Load config from environment variables"""
         if self._config is None:
-            api_key = "AIzaSyAOPjWyUM8bLKMJX1wwNtZ927CS2OzU9JI"
+            api_key = ""
             model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
             self._config = {
