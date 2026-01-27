@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { FiDownload, FiX } from 'react-icons/fi';
+import { FiDownload, FiX, FiSearch } from 'react-icons/fi';
 import { Toaster, toast } from 'react-hot-toast';
 import { useCapabilityApi } from '../hooks/useCapability';
 import type { Capability } from '../hooks/useCapability';
@@ -13,6 +13,7 @@ export default function CompassView() {
   const [modalDescription, setModalDescription] = useState('');
   const [modalTitle, setModalTitle] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [searchTerm, setSearchTerm] = useState('');
   const itemsPerPage = 20;
   const loadedRef = useRef(false);
 
@@ -98,6 +99,39 @@ export default function CompassView() {
   useEffect(() => {
     setCurrentPage(1);
   }, [capabilities]);
+
+  // Reset to first page when search term changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
+
+  // Filter function for search
+  const filterFlattenedData = (data: any[], term: string) => {
+    if (!term.trim()) return data;
+    
+    const lowerTerm = term.toLowerCase();
+    return data.filter((row) => {
+      return (
+        row.vertical?.toLowerCase().includes(lowerTerm) ||
+        row.subvertical?.toLowerCase().includes(lowerTerm) ||
+        row.capabilityName?.toLowerCase().includes(lowerTerm) ||
+        row.capabilityDescription?.toLowerCase().includes(lowerTerm) ||
+        row.processName?.toLowerCase().includes(lowerTerm) ||
+        row.processDescription?.toLowerCase().includes(lowerTerm) ||
+        row.subprocessName?.toLowerCase().includes(lowerTerm) ||
+        row.subprocessDescription?.toLowerCase().includes(lowerTerm) ||
+        row.subprocessData?.toLowerCase().includes(lowerTerm) ||
+        row.processLevel?.toString().toLowerCase().includes(lowerTerm) ||
+        row.processCategory?.toLowerCase().includes(lowerTerm) ||
+        row.subprocessApplication?.toLowerCase().includes(lowerTerm) ||
+        row.subprocessApi?.toLowerCase().includes(lowerTerm) ||
+        (row.dataElements && row.dataElements.some((de: any) => 
+          de.name?.toLowerCase().includes(lowerTerm) || 
+          de.entityName?.toLowerCase().includes(lowerTerm)
+        ))
+      );
+    });
+  };
 
   // Flatten the data for table display
   const flattenedData: any[] = [];
@@ -186,10 +220,11 @@ export default function CompassView() {
   });
 
   // Calculate pagination values
-  const totalPages = Math.ceil(flattenedData.length / itemsPerPage);
+  const filteredAndPaginatedData = filterFlattenedData(flattenedData, searchTerm);
+  const totalPages = Math.ceil(filteredAndPaginatedData.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const endIndex = startIndex + itemsPerPage;
-  const paginatedData = flattenedData.slice(startIndex, endIndex);
+  const paginatedData = filteredAndPaginatedData.slice(startIndex, endIndex);
 
   const handleDownloadCSV = async () => {
     try {
@@ -299,11 +334,21 @@ export default function CompassView() {
         <div className="flex flex-col gap-4 mb-6">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-semibold text-gray-900">Capability Mapping</h1>
-            <div className="ml-auto">
+            <div className="ml-auto flex items-center gap-3">
+              <div className="relative">
+                <FiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                <input
+                  type="text"
+                  placeholder="Search table data..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10 pr-4 py-2 rounded-md border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent w-72"
+                />
+              </div>
               <button
                 className="px-4 py-2 rounded-md text-sm font-medium transition-colors bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 onClick={handleDownloadCSV}
-                disabled={isDownloading || flattenedData.length === 0}
+                disabled={isDownloading || filteredAndPaginatedData.length === 0}
                 title="Download table as CSV"
               >
                 <FiDownload size={18} />
@@ -320,6 +365,10 @@ export default function CompassView() {
         ) : flattenedData.length === 0 ? (
           <div className="flex items-center justify-center py-16">
             <p className="text-gray-500">No capabilities found.</p>
+          </div>
+        ) : filteredAndPaginatedData.length === 0 ? (
+          <div className="flex items-center justify-center py-16">
+            <p className="text-gray-500">No results match your search. Try a different search term.</p>
           </div>
         ) : (
           <div>
@@ -519,7 +568,7 @@ export default function CompassView() {
               </button>
 
               <span className="ml-4 text-sm text-gray-600">
-                Page {currentPage} of {totalPages} | Showing {startIndex + 1} to {Math.min(endIndex, flattenedData.length)} of {flattenedData.length} records
+                Page {currentPage} of {totalPages} | Showing {startIndex + 1} to {Math.min(endIndex, filteredAndPaginatedData.length)} of {filteredAndPaginatedData.length} records
               </span>
             </div>
           )}

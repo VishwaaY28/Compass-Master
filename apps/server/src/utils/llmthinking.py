@@ -46,8 +46,8 @@ class AzureOpenAIThinkingClient:
                 # Retrieve secrets from Key Vault
                 api_key = kv_client.get_secret("llm-api-key").value
                 endpoint = kv_client.get_secret("llm-base-endpoint").value
-                deployment = kv_client.get_secret("llm-41").value
-                api_version = kv_client.get_secret("llm-41-version").value
+                deployment = kv_client.get_secret("llm-mini").value
+                api_version = kv_client.get_secret("llm-mini-version").value
                 
                 # Strip whitespace from all values
                 api_key = api_key.strip() if api_key else None
@@ -109,8 +109,6 @@ class AzureOpenAIThinkingClient:
         query: str,
         vertical: str,
         vertical_data: Dict[str, Any],
-        temperature: float = 0.2,
-        max_tokens: int = 2000,
     ) -> Tuple[str, str]:
         """
         Use Azure OpenAI LLM to think through a query and analyze vertical data.
@@ -119,8 +117,6 @@ class AzureOpenAIThinkingClient:
             query: User's query/question
             vertical: Selected vertical/domain
             vertical_data: Data structure containing capabilities, processes, etc.
-            temperature: LLM temperature (0-1)
-            max_tokens: Maximum tokens for response
 
         Returns:
             Tuple of (thinking_process, final_result)
@@ -149,9 +145,6 @@ class AzureOpenAIThinkingClient:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_message},
                     ],
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    top_p=0.2,
                 )
             except Exception as api_error:
                 logger.error(f"Azure API Error - Deployment: {deployment}, Error: {str(api_error)}")
@@ -175,8 +168,6 @@ class AzureOpenAIThinkingClient:
         query: str,
         vertical: str,
         vertical_data: Dict[str, Any],
-        temperature: float = 0.2,
-        max_tokens: int = 2000,
     ):
         """
         Stream the thinking process and analysis result progressively.
@@ -186,8 +177,6 @@ class AzureOpenAIThinkingClient:
             query: User's query/question
             vertical: Selected vertical/domain
             vertical_data: Data structure containing capabilities, processes, etc.
-            temperature: LLM temperature (0-1)
-            max_tokens: Maximum tokens for response
 
         Yields:
             Tuple of (chunk_type, content) where chunk_type is 'thinking' or 'result'
@@ -210,9 +199,6 @@ class AzureOpenAIThinkingClient:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_message},
                     ],
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    top_p=0.2,
                     stream=True,
                 )
             except Exception as api_error:
@@ -273,26 +259,31 @@ class AzureOpenAIThinkingClient:
 
     def _create_system_prompt(self, vertical: str) -> str:
         """Create system prompt for the LLM"""
-        return f"""You are an expert consultant analyzing business capabilities and processes in the {vertical} domain.
-
-IMPORTANT: You MUST ONLY reference data that is explicitly provided in the context below. Do NOT fabricate, assume, or invent any entities, elements, or relationships that are not in the provided data.
-
-Your task is to:
-1. First, think through the user's query step by step
-2. Analyze the relevant capabilities and processes strictly only from the provided data
-3. Identify the most relevant matches to the user's intent
-4. Provide comprehensive insights strictly based only on the available data
-
-If data is not available, explicitly state "This information is not available in the provided data."
-
-Structure your response as:
-<thinking>
-[Your step-by-step reasoning process - reference only the provided data]
-</thinking>
-
-[Your final analysis and recommendations - cite specific entities and elements from the provided data]
-
-Be thorough in your thinking but concise in your final answer."""
+        return f"""# Role and Objective
+You are an expert consultant focused on analyzing business capabilities and processes within the `{vertical}` domain.
+# Initial Checklist
+Begin with a concise checklist (3-7 bullets) outlining the high-level steps you will take to address the user's query; keep items conceptual, not implementation-specific.
+# Instructions
+- Only reference information that is explicitly provided within the context below.
+- Do not fabricate, assume, or extrapolate any entities, elements, or relationships beyond what is in the provided data.
+- If the required information is not present, state: "This information is not available in the provided data."
+# Task Breakdown
+1. Carefully consider the user's query step by step.
+2. Analyze relevant capabilities and processes using only the supplied data.
+3. Identify the closest matches to the user's intent, referencing specific data.
+4. Provide comprehensive, data-driven insights, clearly citing relevant entities and elements.
+# Response Structure
+- `<thinking>`
+- Detail your step-by-step chain-of-thoughts, referencing only the given data.
+- `</thinking>`
+- Present your final analysis and recommendations.
+- Cite specific entities and elements from the supplied data source.
+# Validation
+After presenting your final analysis, include a brief validation to ensure your conclusions are directly supported by the supplied data. If validation fails, clarify or self-correct as needed.
+# Requirements
+- Be thorough in your internal reasoning, but concise and clear in your public answer.
+- Set reasoning_effort = medium; match the depth of reasoning to the complexity of the query.
+"""
 
     def _create_user_message(self, query: str, context: str) -> str:
         """Create the user message with query and context"""
@@ -417,8 +408,6 @@ Provide both your thinking process and final analysis."""
                         "content": f"Extract the top {max_keywords} key concepts/keywords from this query. Return only the keywords as a comma-separated list:\n{query}",
                     }
                 ],
-                temperature=0.2,
-                max_tokens=100,
             )
 
             keywords_text = response.choices[0].message.content

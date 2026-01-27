@@ -31,13 +31,15 @@ async def seed_database():
     
     # Try multiple possible locations for the CSV
     possible_paths = [
-        Path(__file__).parent.parent.parent / 'elements_fixed.csv',
-        Path(__file__).parent.parent.parent / 'elements.csv',
-        Path(__file__).parent.parent.parent.parent / 'elements_fixed.csv',
-        Path(__file__).parent.parent.parent.parent / 'elements.csv',
-        Path('elements_fixed.csv'),
-        Path('elements.csv'),
-    ]
+         Path(__file__).parent.parent.parent / 'elements_fixed.csv',
+         Path(__file__).parent.parent.parent.parent / 'elements_fixed.csv',
+         Path('elements_fixed.csv'),
+     ]
+    # possible_paths = [
+    #     Path(__file__).parent.parent.parent / 'fund_mandate.csv',
+    #     Path(__file__).parent.parent.parent.parent / 'fund_mandate.csv',
+    #     Path('fund_mandate.csv'),
+    # ]
     
     csv_path = None
     for path in possible_paths:

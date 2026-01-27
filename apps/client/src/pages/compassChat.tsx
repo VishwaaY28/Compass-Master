@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FiSend, FiTrash2, FiChevronDown, FiLoader } from 'react-icons/fi';
+import { FiSend, FiTrash2, FiChevronDown, FiLoader, FiDownload } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import toast from 'react-hot-toast';
+import jsPDF from 'jspdf';
 import { useCompassChat, type ChatMessage } from '../hooks/useCompassChat';
 import { useCapabilityApi } from '../hooks/useCapability';
 
@@ -79,6 +80,223 @@ const CompassChat: React.FC = () => {
     }));
   };
 
+  const exportToPDF = () => {
+    try {
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      let yPosition = 20;
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const margin = 15;
+      const maxWidth = pageWidth - 2 * margin;
+      const lineHeight = 7;
+
+      // Title
+      pdf.setFontSize(16);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(0, 0, 0);
+      pdf.text('Compass Chat Export', margin, yPosition);
+      yPosition += 15;
+
+      // Timestamp
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(100);
+      pdf.text(`Generated on: ${new Date().toLocaleString()}`, margin, yPosition);
+      yPosition += 12;
+
+      // Add separator line
+      pdf.setDrawColor(200);
+      pdf.line(margin, yPosition, pageWidth - margin, yPosition);
+      yPosition += 10;
+
+      // Add messages
+      dualMessages.forEach((dualMsg, msgIndex) => {
+        // Check if we need a new page
+        if (yPosition > pageHeight - 30) {
+          pdf.addPage();
+          yPosition = 20;
+        }
+
+        // User message
+        pdf.setFontSize(11);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(0, 0, 0);
+        pdf.text('You:', margin, yPosition);
+        yPosition += 7;
+
+        pdf.setFontSize(10);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(50);
+        const userLines = pdf.splitTextToSize(dualMsg.userMessage.result, maxWidth);
+        pdf.text(userLines, margin + 5, yPosition);
+        yPosition += userLines.length * lineHeight + 3;
+
+        if (dualMsg.userMessage.vertical) {
+          pdf.setFontSize(9);
+          pdf.setFont('helvetica', 'normal');
+          pdf.setTextColor(120);
+          pdf.text(`Vertical: ${dualMsg.userMessage.vertical}`, margin + 5, yPosition);
+          yPosition += 7;
+        }
+
+        yPosition += 5;
+
+        // DB Response
+        if (dualMsg.withDbResponse) {
+          if (yPosition > pageHeight - 30) {
+            pdf.addPage();
+            yPosition = 20;
+          }
+
+          pdf.setFontSize(11);
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(0, 102, 204);
+          pdf.text('Using Capability Compass', margin + 5, yPosition);
+          yPosition += 7;
+
+          if (dualMsg.withDbResponse.thinking) {
+            pdf.setFontSize(9);
+            pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(59, 130, 246);
+            pdf.text('Thinking Process:', margin + 10, yPosition);
+            yPosition += 6;
+
+            pdf.setFontSize(8);
+            pdf.setFont('helvetica', 'normal');
+            pdf.setTextColor(80);
+            const thinkingLines = pdf.splitTextToSize(
+              dualMsg.withDbResponse.thinking,
+              maxWidth - 10
+            );
+            
+            // Handle page breaks for long thinking content
+            for (let i = 0; i < thinkingLines.length; i++) {
+              if (yPosition > pageHeight - 15) {
+                pdf.addPage();
+                yPosition = 20;
+              }
+              pdf.text(thinkingLines[i], margin + 10, yPosition);
+              yPosition += lineHeight - 1;
+            }
+            yPosition += 3;
+          }
+
+          if (dualMsg.withDbResponse.result) {
+            pdf.setFontSize(9);
+            pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(5, 150, 105);
+            pdf.text('Analysis:', margin + 10, yPosition);
+            yPosition += 6;
+
+            pdf.setFontSize(8);
+            pdf.setFont('helvetica', 'normal');
+            pdf.setTextColor(80);
+            const resultLines = pdf.splitTextToSize(
+              dualMsg.withDbResponse.result,
+              maxWidth - 10
+            );
+            
+            // Handle page breaks for long result content
+            for (let i = 0; i < resultLines.length; i++) {
+              if (yPosition > pageHeight - 15) {
+                pdf.addPage();
+                yPosition = 20;
+              }
+              pdf.text(resultLines[i], margin + 10, yPosition);
+              yPosition += lineHeight - 1;
+            }
+            yPosition += 3;
+          }
+
+          yPosition += 5;
+        }
+
+        // Independent Response
+        if (dualMsg.independentResponse) {
+          if (yPosition > pageHeight - 30) {
+            pdf.addPage();
+            yPosition = 20;
+          }
+
+          pdf.setFontSize(11);
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(139, 92, 246);
+          pdf.text('Without Capability Compass', margin + 5, yPosition);
+          yPosition += 7;
+
+          if (dualMsg.independentResponse.thinking) {
+            pdf.setFontSize(9);
+            pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(59, 130, 246);
+            pdf.text('Thinking Process:', margin + 10, yPosition);
+            yPosition += 6;
+
+            pdf.setFontSize(8);
+            pdf.setFont('helvetica', 'normal');
+            pdf.setTextColor(80);
+            const thinkingLines = pdf.splitTextToSize(
+              dualMsg.independentResponse.thinking,
+              maxWidth - 10
+            );
+            
+            // Handle page breaks for long thinking content
+            for (let i = 0; i < thinkingLines.length; i++) {
+              if (yPosition > pageHeight - 15) {
+                pdf.addPage();
+                yPosition = 20;
+              }
+              pdf.text(thinkingLines[i], margin + 10, yPosition);
+              yPosition += lineHeight - 1;
+            }
+            yPosition += 3;
+          }
+
+          if (dualMsg.independentResponse.result) {
+            pdf.setFontSize(9);
+            pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(5, 150, 105);
+            pdf.text('Analysis:', margin + 10, yPosition);
+            yPosition += 6;
+
+            pdf.setFontSize(8);
+            pdf.setFont('helvetica', 'normal');
+            pdf.setTextColor(80);
+            const resultLines = pdf.splitTextToSize(
+              dualMsg.independentResponse.result,
+              maxWidth - 10
+            );
+            
+            // Handle page breaks for long result content
+            for (let i = 0; i < resultLines.length; i++) {
+              if (yPosition > pageHeight - 15) {
+                pdf.addPage();
+                yPosition = 20;
+              }
+              pdf.text(resultLines[i], margin + 10, yPosition);
+              yPosition += lineHeight - 1;
+            }
+            yPosition += 3;
+          }
+        }
+
+        // Message separator
+        yPosition += 8;
+        if (msgIndex < dualMessages.length - 1) {
+          pdf.setDrawColor(230);
+          pdf.line(margin, yPosition, pageWidth - margin, yPosition);
+          yPosition += 8;
+        }
+      });
+
+      // Save PDF
+      pdf.save(`compass-chat-${new Date().toISOString().split('T')[0]}.pdf`);
+      toast.success('Chat exported to PDF successfully!');
+    } catch (err) {
+      console.error('Failed to export PDF:', err);
+      toast.error('Failed to export chat to PDF');
+    }
+  };
+
   const renderMessage = (message: ChatMessage | undefined, messageId: string, side: 'db' | 'independent') => {
     if (!message) {
       return (
@@ -117,6 +335,7 @@ const CompassChat: React.FC = () => {
               <div className="border-t border-blue-200 px-4 py-4 bg-white">
                 <div className="text-sm text-gray-800 leading-relaxed space-y-3">
                   <div className="prose prose-sm max-w-none dark:prose-invert">
+
                     {message.thinking.split('\n\n').map((paragraph, idx) => (
                       <p key={idx} className="whitespace-pre-wrap break-words mb-3 text-gray-900 font-normal">
                         {paragraph}
@@ -131,7 +350,9 @@ const CompassChat: React.FC = () => {
 
         {/* Result Section */}
         <div className="bg-gradient-to-r from-gray-50 to-gray-25 border border-gray-200 rounded-lg p-5">
-
+<span className="text-sm font-bold text-black-700 group-hover:text-blue-800">
+                  LLM Response
+                </span>
           <div className="text-sm text-gray-800 leading-relaxed prose prose-sm max-w-none dark:prose-invert">
             <ReactMarkdown
               components={{
@@ -144,7 +365,7 @@ const CompassChat: React.FC = () => {
                 li: ({ children }) => <li className="mb-1.5 ml-1">{children}</li>,
                 code: ({ inline, children }: any) =>
                   inline ? (
-                    <code className="bg-gray-200 px-2 py-1 rounded text-xs font-mono text-gray-900">{children}</code>
+                    <code className="text-gray-900 font-semibold">{children}</code>
                   ) : (
                     <code className="block bg-gray-900 text-gray-100 p-4 rounded-lg mb-3 overflow-x-auto text-xs font-mono border border-gray-700">
                       {children}
@@ -176,7 +397,7 @@ const CompassChat: React.FC = () => {
 
         {/* Timestamp */}
         <p className="text-xs text-gray-400 text-right px-2">
-          {message.timestamp.toLocaleTimeString()}
+          {new Date(message.timestamp).toLocaleTimeString()}
         </p>
       </div>
     );
@@ -190,15 +411,26 @@ const CompassChat: React.FC = () => {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Compass Chat</h1>
           </div>
-          <button
-            onClick={clearMessages}
-            disabled={dualMessages.length === 0}
-            className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Clear chat history"
-          >
-            <FiTrash2 size={18} />
-            <span className="text-sm">Clear</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={exportToPDF}
+              disabled={dualMessages.length === 0}
+              className="flex items-center gap-2 px-4 py-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Export chat to PDF"
+            >
+              <FiDownload size={18} />
+              <span className="text-sm">Export PDF</span>
+            </button>
+            <button
+              onClick={clearMessages}
+              disabled={dualMessages.length === 0}
+              className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Clear chat history"
+            >
+              <FiTrash2 size={18} />
+              <span className="text-sm">Clear</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -345,9 +577,6 @@ const CompassChat: React.FC = () => {
             </button>
           </div>
         </form>
-        <p className="text-xs text-gray-400 mt-2">
-          Select a vertical to compare database-driven analysis with independent AI thinking
-        </p>
       </div>
     </div>
   );

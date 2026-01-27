@@ -1,5 +1,5 @@
 import logging
-from openai import OpenAI
+from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
 from typing import List, Dict, Any, Optional
@@ -57,9 +57,9 @@ class AzureOpenAIClient:
                 # Load endpoint from Key Vault
                 endpoint_secret = kvclient.get_secret("llm-base-endpoint")
                 endpoint = endpoint_secret.value
-                api_version_secret = kvclient.get_secret("llm-41-version")
+                api_version_secret = kvclient.get_secret("llm-mini-version")
                 api_version = api_version_secret.value
-                model_secret = kvclient.get_secret("llm-41")
+                model_secret = kvclient.get_secret("llm-mini")
                 model = model_secret.value
                 logger.info("Endpoint loaded from Key Vault")
             except Exception as e:
@@ -95,9 +95,20 @@ class AzureOpenAIClient:
                     "Missing required Azure OpenAI config: api_key. "
                     "Provide this via environment variable AZURE_OPENAI_API_KEY."
                 )
-            self._client = OpenAI(
+            # Clean up the endpoint - remove any trailing slashes or /openai paths
+            endpoint = config["endpoint"].strip()
+            if endpoint.endswith("/"):
+                endpoint = endpoint.rstrip("/")
+            # Remove any /openai or /chat paths that might be included
+            if "/openai" in endpoint:
+                endpoint = endpoint.split("/openai")[0]
+            
+            logger.info(f"Initializing AzureOpenAI with endpoint: {endpoint}, api_version: {config.get('api_version')}")
+            
+            self._client = AzureOpenAI(
                 api_key=config["api_key"],
-                base_url=config["endpoint"]
+                api_version=config.get("api_version", "2024-02-15-preview"),
+                azure_endpoint=endpoint
             )
         return self._client
 
@@ -147,10 +158,6 @@ class AzureOpenAIClient:
                 self.key_vault_url = vault_url
                 config = self._load_config(settings)
             client = self._get_client()
-
-            
-            temperature = settings.get("temperature", 0.5)
-            top_p = settings.get("topP", 0.9)
 
             workspace_content = ""
             if context_sections:
@@ -287,15 +294,13 @@ class AzureOpenAIClient:
                     """
                 )
 
-            # Generate content using Azure OpenAI
+
             response = client.chat.completions.create(
                 model=config["model"],
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt_text}
                 ],
-                temperature=temperature,
-                top_p=top_p,
                 frequency_penalty=0.0
             )
             generated = response.choices[0].message.content.strip()
