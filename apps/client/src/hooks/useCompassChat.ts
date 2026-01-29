@@ -173,89 +173,123 @@ export const useCompassChat = (): UseCompassChatReturn => {
         
         setDualMessages((prev) => [...prev, dualMessage]);
 
-        // Send both requests in parallel
-        const [withDbResponse, independentResponse] = await Promise.all([
-          // Request WITH database context
-          fetch('/api/chat/compass', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              query,
-              vertical,
-              temperature: 0.7,
-              max_tokens: 2000,
-            }),
+        // Send both requests in parallel but update UI as each completes
+        const withDbPromise = fetch('/api/chat/compass', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            query,
+            vertical,
+            temperature: 0.7,
+            max_tokens: 2000,
           }),
-          // Request WITHOUT database context (independent thinking)
-          fetch('/api/chat/compass/independent', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              query,
-              vertical,
-              temperature: 0.7,
-              max_tokens: 2000,
-            }),
+        });
+
+        const independentPromise = fetch('/api/chat/compass/independent', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            query,
+            vertical,
+            temperature: 0.7,
+            max_tokens: 2000,
           }),
-        ]);
+        });
 
-        if (!withDbResponse.ok) {
-          const errorData = await withDbResponse.json();
-          throw new Error(
-            errorData.detail || `HTTP ${withDbResponse.status}: ${withDbResponse.statusText}`
-          );
-        }
+        // Handle WITH DB response when it completes
+        withDbPromise
+          .then(async (response) => {
+            if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(
+                errorData.detail || `HTTP ${response.status}: ${response.statusText}`
+              );
+            }
+            return response.json();
+          })
+          .then((withDbData) => {
+            const withDbMessage: ChatMessage = {
+              id: `agent-with-db-${messageId}`,
+              type: 'agent',
+              thinking: withDbData.thinking,
+              result: withDbData.result,
+              timestamp: new Date().toISOString(),
+              vertical,
+            };
 
-        if (!independentResponse.ok) {
-          const errorData = await independentResponse.json();
-          throw new Error(
-            errorData.detail || `HTTP ${independentResponse.status}: ${independentResponse.statusText}`
-          );
-        }
+            // Update only the withDbResponse
+            setDualMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === messageId
+                  ? {
+                      ...msg,
+                      withDbResponse: withDbMessage,
+                    }
+                  : msg
+              )
+            );
+          })
+          .catch((err) => {
+            const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+            setError(errorMessage);
+            console.error('[useCompassChat] WithDb Error:', errorMessage);
+          });
 
-        const withDbData = await withDbResponse.json();
-        const independentData = await independentResponse.json();
+        // Handle INDEPENDENT response when it completes
+        independentPromise
+          .then(async (response) => {
+            if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(
+                errorData.detail || `HTTP ${response.status}: ${response.statusText}`
+              );
+            }
+            return response.json();
+          })
+          .then((independentData) => {
+            const independentAgentMessage: ChatMessage = {
+              id: `agent-independent-${messageId}`,
+              type: 'agent',
+              thinking: independentData.thinking,
+              result: independentData.result,
+              timestamp: new Date().toISOString(),
+              vertical,
+            };
 
-        // Create agent messages for both responses
-        const withDbMessage: ChatMessage = {
-          id: `agent-with-db-${messageId}`,
-          type: 'agent',
-          thinking: withDbData.thinking,
-          result: withDbData.result,
-          timestamp: new Date().toISOString(),
-          vertical,
-        };
+            // Update only the independentResponse
+            setDualMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === messageId
+                  ? {
+                      ...msg,
+                      independentResponse: independentAgentMessage,
+                    }
+                  : msg
+              )
+            );
 
-        const independentAgentMessage: ChatMessage = {
-          id: `agent-independent-${messageId}`,
-          type: 'agent',
-          thinking: independentData.thinking,
-          result: independentData.result,
-          timestamp: new Date().toISOString(),
-          vertical,
-        };
+            // Stop loading only after both responses complete
+            setIsLoading(false);
+          })
+          .catch((err) => {
+            const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+            setError(errorMessage);
+            console.error('[useCompassChat] Independent Error:', errorMessage);
+            setIsLoading(false);
+          });
 
-        // Update dual message with both responses
-        setDualMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === messageId
-              ? {
-                  ...msg,
-                  withDbResponse: withDbMessage,
-                  independentResponse: independentAgentMessage,
-                }
-              : msg
-          )
-        );
+        // Also wait for both to start so we can properly track loading state
+        await Promise.all([withDbPromise, independentPromise]).catch(() => {
+          // Errors already handled by individual promise handlers
+        });
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
         setError(errorMessage);
         console.error('[useCompassChat] Error:', errorMessage);
-      } finally {
         setIsLoading(false);
       }
     },

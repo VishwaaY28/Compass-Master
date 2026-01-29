@@ -33,6 +33,7 @@ class AzureOpenAIThinkingClient:
     def __init__(self):
         self._client = None
         self._config = None
+        self._last_system_prompt = None
 
     def _load_config(self) -> Dict[str, Any]:
         """Load Azure OpenAI API configuration from Key Vault"""
@@ -104,6 +105,10 @@ class AzureOpenAIThinkingClient:
 
         return self._client
 
+    def get_last_system_prompt(self) -> Optional[str]:
+        """Get the last system prompt used"""
+        return self._last_system_prompt
+
     def think_and_analyze(
         self,
         query: str,
@@ -130,6 +135,8 @@ class AzureOpenAIThinkingClient:
 
             # Create system prompt for thinking
             system_prompt = self._create_system_prompt(vertical)
+            # Store the system prompt for logging
+            self._last_system_prompt = system_prompt
 
             # Create user message with thinking instructions
             user_message = self._create_user_message(query, context)
@@ -187,6 +194,8 @@ class AzureOpenAIThinkingClient:
 
             context = self._build_context(vertical, vertical_data)
             system_prompt = self._create_system_prompt(vertical)
+            # Store the system prompt for logging
+            self._last_system_prompt = system_prompt
             user_message = self._create_user_message(query, context)
 
             deployment = config["deployment"]
@@ -259,30 +268,24 @@ class AzureOpenAIThinkingClient:
 
     def _create_system_prompt(self, vertical: str) -> str:
         """Create system prompt for the LLM"""
-        return f"""# Role and Objective
-You are an expert consultant focused on analyzing business capabilities and processes within the `{vertical}` domain.
-# Initial Checklist
-Begin with a concise checklist (3-7 bullets) outlining the high-level steps you will take to address the user's query; keep items conceptual, not implementation-specific.
-# Instructions
-- Only reference information that is explicitly provided within the context below.
-- Do not fabricate, assume, or extrapolate any entities, elements, or relationships beyond what is in the provided data.
-- If the required information is not present, state: "This information is not available in the provided data."
-# Task Breakdown
-1. Carefully consider the user's query step by step.
-2. Analyze relevant capabilities and processes using only the supplied data.
-3. Identify the closest matches to the user's intent, referencing specific data.
-4. Provide comprehensive, data-driven insights, clearly citing relevant entities and elements.
-# Response Structure
-- `<thinking>`
-- Detail your step-by-step chain-of-thoughts, referencing only the given data.
-- `</thinking>`
-- Present your final analysis and recommendations.
-- Cite specific entities and elements from the supplied data source.
-# Validation
-After presenting your final analysis, include a brief validation to ensure your conclusions are directly supported by the supplied data. If validation fails, clarify or self-correct as needed.
-# Requirements
-- Be thorough in your internal reasoning, but concise and clear in your public answer.
-- Set reasoning_effort = medium; match the depth of reasoning to the complexity of the query.
+        return f"""You are an expert consultant analyzing business capabilities and processes in the {vertical} domain.
+
+Your task is to:
+1. First, think through the user's query step by step
+2. Analyze the relevant capabilities and processes using only the data provided
+3. Identify the most relevant matches to the user's intent that is present in the provided data
+4. Provide comprehensive insights based on all available information collected from the provided data
+5. Dont invent or fabricate data, rely only on the provided data
+If data is not available from the provided source, explicitly state "This information is not available."
+
+Structure your response as:
+<thinking>
+[Your step-by-step reasoning process - reference reputable external sources]
+</thinking>
+
+[Your final analysis and recommendations - cite specific entities and elements from the given data source]
+display user which capability/process you are using for his query at the top only if applicable or relevant.
+Be thorough in your thinking but concise in your final answer.
 """
 
     def _create_user_message(self, query: str, context: str) -> str:
@@ -293,81 +296,111 @@ Please analyze this query: {query}
 Provide both your thinking process and final analysis."""
 
     def _build_context(self, vertical: str, vertical_data: Dict[str, Any]) -> str:
-        """Build context string from vertical data including entities and elements"""
+        """Build hierarchical context string from vertical data: Capability -> Process -> SubProcess -> Data Entity -> Data Element"""
         try:
+            logger.info(f"[Context] Building context for vertical: {vertical}")
+            logger.info(f"[Context] Received data type: {type(vertical_data)}")
+            logger.info(f"[Context] Received data keys: {list(vertical_data.keys()) if isinstance(vertical_data, dict) else 'Not a dict'}")
+            
+            if isinstance(vertical_data, dict) and 'capabilities' in vertical_data:
+                logger.info(f"[Context] Number of capabilities: {len(vertical_data.get('capabilities', []))}")
+                for cap in vertical_data.get('capabilities', []):
+                    if isinstance(cap, dict):
+                        logger.info(f"[Context]   - Capability: {cap.get('name')}, Processes: {len(cap.get('processes', []))}")
+            
             context_parts = [f"Vertical: {vertical}\n"]
 
             if isinstance(vertical_data, dict):
-                # Add capabilities
+                # Build hierarchical structure: Capability -> Process -> SubProcess -> Data Entities/Elements
                 if "capabilities" in vertical_data and vertical_data["capabilities"]:
-                    context_parts.append("=== Available Capabilities ===")
+                    context_parts.append("=== BUSINESS CAPABILITIES HIERARCHY ===\n")
+                    
                     for cap in vertical_data["capabilities"]:
                         if isinstance(cap, dict):
-                            context_parts.append(
-                                f"  • {cap.get('name', 'Unknown')}: {cap.get('description', '')}"
-                            )
-                        else:
-                            context_parts.append(f"  • {cap}")
-
-                # Add processes
-                if "processes" in vertical_data and vertical_data["processes"]:
-                    context_parts.append("\n=== Key Processes ===")
-                    for proc in vertical_data["processes"]:
-                        if isinstance(proc, dict):
-                            context_parts.append(
-                                f"  • {proc.get('name', 'Unknown')} [{proc.get('level', 'unknown')} - {proc.get('category', 'unknown')}]: {proc.get('description', '')}"
-                            )
-                        else:
-                            context_parts.append(f"  • {proc}")
-
-                # Add subprocesses
-                if "subprocesses" in vertical_data and vertical_data["subprocesses"]:
-                    context_parts.append("\n=== Subprocesses ===")
-                    for subproc in vertical_data["subprocesses"]:
-                        if isinstance(subproc, dict):
-                            context_parts.append(
-                                f"  • {subproc.get('name', 'Unknown')} [{subproc.get('category', 'unknown')}]: {subproc.get('description', '')}"
-                            )
-                            if subproc.get('application'):
-                                context_parts.append(f"      Application: {subproc.get('application')}")
-                            if subproc.get('api'):
-                                context_parts.append(f"      API: {subproc.get('api')}")
-                        else:
-                            context_parts.append(f"  • {subproc}")
-
-                # Add data entities
-                if "data_entities" in vertical_data and vertical_data["data_entities"]:
-                    context_parts.append("\n=== Data Entities ===")
-                    for entity in vertical_data["data_entities"]:
-                        if isinstance(entity, dict):
-                            context_parts.append(
-                                f"  • {entity.get('name', 'Unknown')}: {entity.get('description', '')}"
-                            )
-                        else:
-                            context_parts.append(f"  • {entity}")
-
-                # Add data elements
-                if "data_elements" in vertical_data and vertical_data["data_elements"]:
-                    context_parts.append("\n=== Data Elements ===")
-                    for element in vertical_data["data_elements"]:
-                        if isinstance(element, dict):
-                            context_parts.append(
-                                f"  • {element.get('name', 'Unknown')}: {element.get('description', '')}"
-                            )
-                        else:
-                            context_parts.append(f"  • {element}")
+                            cap_name = cap.get('name', 'Unknown')
+                            cap_desc = cap.get('description', '')
+                            context_parts.append(f"\nCapability: {cap_name}")
+                            if cap_desc:
+                                context_parts.append(f"  Description: {cap_desc}")
+                            
+                            # Get processes for this capability
+                            cap_processes = cap.get('processes', [])
+                            logger.info(f"[Context] Capability {cap_name} has {len(cap_processes)} processes")
+                            
+                            if cap_processes:
+                                context_parts.append("  └─ Processes:")
+                                for proc in cap_processes:
+                                    if isinstance(proc, dict):
+                                        proc_name = proc.get('name', 'Unknown')
+                                        proc_level = proc.get('level', 'unknown')
+                                        proc_cat = proc.get('category', 'unknown')
+                                        proc_desc = proc.get('description', '')
+                                        context_parts.append(f"      ├─ {proc_name} (Level: {proc_level}, Category: {proc_cat})")
+                                        if proc_desc:
+                                            context_parts.append(f"         │  Description: {proc_desc}")
+                                        
+                                        # Get subprocesses for this process
+                                        proc_subprocesses = proc.get('subprocesses', [])
+                                        logger.info(f"[Context] Process {proc_name} has {len(proc_subprocesses)} subprocesses")
+                                        
+                                        if proc_subprocesses:
+                                            context_parts.append(f"         │  └─ SubProcesses:")
+                                            for idx, subproc in enumerate(proc_subprocesses):
+                                                if isinstance(subproc, dict):
+                                                    subproc_name = subproc.get('name', 'Unknown')
+                                                    subproc_cat = subproc.get('category', 'unknown')
+                                                    subproc_desc = subproc.get('description', '')
+                                                    is_last_subproc = (idx == len(proc_subprocesses) - 1)
+                                                    prefix = "└─" if is_last_subproc else "├─"
+                                                    context_parts.append(f"         │     {prefix} {subproc_name} (Category: {subproc_cat})")
+                                                    if subproc_desc:
+                                                        context_parts.append(f"         │        Description: {subproc_desc}")
+                                                    if subproc.get('application'):
+                                                        context_parts.append(f"         │        Application: {subproc.get('application')}")
+                                                    if subproc.get('api'):
+                                                        context_parts.append(f"         │        API: {subproc.get('api')}")
+                                                    
+                                                    # Get data entities and elements for this subprocess
+                                                    data_entities = subproc.get('data_entities', [])
+                                                    logger.info(f"[Context] SubProcess {subproc_name} has {len(data_entities)} data entities")
+                                                    
+                                                    if data_entities:
+                                                        context_parts.append(f"         │        └─ Data Entities:")
+                                                        for entity_idx, entity in enumerate(data_entities):
+                                                            if isinstance(entity, dict):
+                                                                entity_name = entity.get('data_entity_name', 'Unknown')
+                                                                entity_desc = entity.get('data_entity_description', '')
+                                                                is_last_entity = (entity_idx == len(data_entities) - 1)
+                                                                entity_prefix = "└─" if is_last_entity else "├─"
+                                                                context_parts.append(f"         │           {entity_prefix} {entity_name}")
+                                                                if entity_desc:
+                                                                    context_parts.append(f"         │              Description: {entity_desc}")
+                                                                
+                                                                # Get data elements for this entity
+                                                                data_elements = entity.get('data_elements', [])
+                                                                if data_elements:
+                                                                    context_parts.append(f"         │              └─ Data Elements:")
+                                                                    for elem_idx, element in enumerate(data_elements):
+                                                                        if isinstance(element, dict):
+                                                                            elem_name = element.get('data_element_name', 'Unknown')
+                                                                            elem_desc = element.get('data_element_description', '')
+                                                                            is_last_elem = (elem_idx == len(data_elements) - 1)
+                                                                            elem_prefix = "└─" if is_last_elem else "├─"
+                                                                            context_parts.append(f"         │                 {elem_prefix} {elem_name}")
+                                                                            if elem_desc:
+                                                                                context_parts.append(f"         │                    {elem_desc}")
 
             context_text = "\n".join(context_parts)
+            logger.info(f"[Context] Built context length: {len(context_text)} characters")
+            
             # Limit context to reasonable size but preserve all data sections
-            max_context_length = 50000
+            max_context_length = 100000
             if len(context_text) > max_context_length:
-                # Try to truncate gracefully by removing the least important sections
-                logger.info(f"Context exceeds {max_context_length} chars ({len(context_text)}), truncating carefully")
-                # Keep the vertical name and data entities/elements which are most important
+                logger.info(f"[Context] Context exceeds {max_context_length} chars ({len(context_text)}), truncating")
                 return context_text[:max_context_length]
             return context_text
         except Exception as e:
-            logger.warning(f"Error building context: {e}")
+            logger.warning(f"Error building context: {e}", exc_info=True)
             return f"Vertical: {vertical}"
 
     def _parse_response(self, response_text: str) -> Tuple[str, str]:

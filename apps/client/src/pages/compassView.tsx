@@ -319,9 +319,9 @@ export default function CompassView() {
       <header className="border-b sticky top-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50">
         <div className="container px-6 py-4">
           <div className="flex items-center gap-3">
-            <img src={favicon} width={40} height={40} alt="favicon" />
+           {/* <img src={favicon} width={40} height={40} alt="favicon" /> */}
             <div>
-              <h1 className="text-xl font-semibold">Compass view™</h1>
+              <h1 className="text-xl font-semibold">View</h1>
               <p className="text-xs text-muted-foreground">
                 View all your enterprise capabilities and processes in one place.
               </p>

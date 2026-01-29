@@ -798,9 +798,9 @@ export default function Home() {
       <header className="border-b sticky top-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50">
           <div className="container px-6 py-4">
               <div className="flex items-center gap-3">
-                <img src={favicon} width={40} height={40} alt="favicon" />
+           {/* <img src={favicon} width={40} height={40} alt="favicon" /> */}
                 <div>
-                    <h1 className="text-xl font-semibold">Capability Master™</h1>
+                    <h1 className="text-xl font-semibold">Master Catalog</h1>
                     <p className="text-xs text-muted-foreground">
                       Manage your enterprise capabilities and their associated processes.
                     </p>
@@ -812,7 +812,7 @@ export default function Home() {
       <div className="mx-auto mt-6 bg-white p-6 px-8 rounded-lg shadow-sm max-w-6xl">
         <div className="flex items-center gap-3 mb-6">
           <FiLayers className="w-8 h-8" />
-          <h1 className="text-2xl font-semibold text-gray-900">Sub-Vertical</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">Capabilities</h1>
           <div className="ml-auto">
                   <button
                     className="px-4 py-2 rounded-md text-sm font-medium transition-colors bg-gray-100 border border-primary text-indigo-600 hover:bg-indigo-700 hover:text-white"

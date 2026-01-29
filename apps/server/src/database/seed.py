@@ -15,6 +15,7 @@ async def seed_database():
     - Sub-Vertical / SubVertical / Sub Vertical
     - Capability / Capability Name
     - Capability Description / Capability Desc
+    - Organization Units / Org Units / org_units
     - Process / Process Name
     - Process Description / Process Desc
     - Process Level / Level
@@ -29,7 +30,7 @@ async def seed_database():
     If a field is missing, it will be skipped gracefully.
     """
     
-    # Try multiple possible locations for the CSV
+    #Try multiple possible locations for the CSV
     possible_paths = [
          Path(__file__).parent.parent.parent / 'elements_fixed.csv',
          Path(__file__).parent.parent.parent.parent / 'elements_fixed.csv',
@@ -100,6 +101,7 @@ async def seed_database():
             sub_vertical = get_column_value(row, 'Sub-Vertical', 'SubVertical', 'Sub Vertical', 'sub_vertical', 'sub-vertical') or 'Asset Management'
             capability_name = get_column_value(row, 'Capability', 'Capability Name', 'capability', 'capability_name')
             capability_desc = get_column_value(row, 'Capability Description', 'Capability Desc', 'capability_description', 'capability_desc')
+            org_units = get_column_value(row, 'Organization Units', 'Org Units', 'org_units', 'organization_units')
             process_name = get_column_value(row, 'Process', 'Process Name', 'process', 'process_name')
             process_desc = get_column_value(row, 'Process Description', 'Process Desc', 'process_description', 'process_desc')
             process_level = get_column_value(row, 'Process Level', 'Level', 'process_level', 'level') or 'core'
@@ -108,7 +110,7 @@ async def seed_database():
             subprocess_desc = get_column_value(row, 'Sub-Process Description', 'Subprocess Description', 'Sub Process Desc', 'subprocess_description', 'subprocess_desc')
             data_entity_name = get_column_value(row, 'Data Entity', 'Data Entities', 'data_entity', 'data_entities')
             data_element_name = get_column_value(row, 'Data Element', 'Data Elements', 'Element', 'data_element', 'element')
-            application = get_column_value(row, 'Application', 'App', 'System', 'application', 'app', 'system')
+            application = get_column_value(row, 'Applications', 'App', 'System', 'application', 'app', 'system')
             api = get_column_value(row, 'API', 'APIs', 'Endpoints', 'api', 'apis', 'endpoints')
             
             try:
@@ -142,7 +144,8 @@ async def seed_database():
                         capability, _ = await Capability.get_or_create(
                             name=capability_name,
                             description=capability_desc,
-                            subvertical=subvert
+                            subvertical=subvert,
+                            defaults={'org_units': org_units if org_units else None}
                         )
                         capabilities[cap_key] = capability
                         logger.info(f"✓ Created Capability: {capability_name}")

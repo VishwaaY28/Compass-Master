@@ -25,10 +25,10 @@ const Sidebar: React.FC = () => {
   const [isEditingSettings, setIsEditingSettings] = useState(false);
 
   const navItems = [
-    { label: 'Capability Master', path: '/dashboard', icon: FiHome },
-    { label: 'Capability Compass', path: '/dashboard/research-agent', icon: FiLayers },
+    { label: 'Master Catalog', path: '/dashboard', icon: FiHome },
+    { label: 'LookItUp', path: '/dashboard/research-agent', icon: FiLayers },
     { label: 'Compass Chat', path: '/dashboard/compass-chat', icon: FiMessageSquare },
-    { label: 'Compass View', path: '/dashboard/compass-view', icon: FiEye },
+    { label: 'View', path: '/dashboard/compass-view', icon: FiEye },
   ];
 
   // Load current LLM settings on mount
@@ -98,15 +98,33 @@ const Sidebar: React.FC = () => {
       }`}
     >
       {/* Header */}
-      <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-        {!collapsed && <h2 className="font-bold text-lg text-gray-900">Compass</h2>}
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          className="p-1 hover:bg-gray-100 rounded-md"
-          title={collapsed ? 'Expand' : 'Collapse'}
-        >
-          {collapsed ? <FiChevronRight size={18} /> : <FiChevronLeft size={18} />}
-        </button>
+      <div className={`p-4 border-b border-gray-200 flex items-center justify-between relative`}>
+        {collapsed ? (
+          <>
+            <img src="/favicon.png" alt="Compass" className="w-6 h-6" />
+            <button
+              onClick={() => setCollapsed(!collapsed)}
+              className="p-1 hover:bg-gray-100 rounded-md"
+              title="Expand"
+            >
+              <FiChevronRight size={18} />
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-2">
+              <img src="/favicon.png" alt="Compass" className="w-6 h-6" />
+              <h2 className="font-bold text-lg text-gray-900">Capability Compass</h2>
+            </div>
+            <button
+              onClick={() => setCollapsed(!collapsed)}
+              className="p-1 hover:bg-gray-100 rounded-md flex-shrink-0"
+              title="Collapse"
+            >
+              <FiChevronLeft size={18} />
+            </button>
+          </>
+        )}
       </div>
 
       {/* Navigation */}
