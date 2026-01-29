@@ -112,14 +112,16 @@ class AzureOpenAIIndependentClient:
         self,
         query: str,
         vertical: str,
+        vertical_data: Dict[str, Any] = None,
     ) -> Tuple[str, str]:
         """
-        Use Azure OpenAI LLM to think through a query WITHOUT database context.
-        The LLM relies on its own knowledge and reasoning about the vertical domain.
+        Use Azure OpenAI LLM to think through a query with optional vertical context.
+        The LLM can use provided vertical data alongside its own knowledge and reasoning.
 
         Args:
             query: User's query/question
-            vertical: Selected vertical/domain (for context only, not data)
+            vertical: Selected vertical/domain
+            vertical_data: Optional data structure containing capabilities, processes, etc.
 
         Returns:
             Tuple of (thinking_process, final_result)
@@ -133,8 +135,8 @@ class AzureOpenAIIndependentClient:
             # Store the system prompt for logging
             self._last_system_prompt = system_prompt
 
-            # Create user message
-            user_message = self._create_user_message(query)
+            # Create user message with optional context
+            user_message = self._create_user_message(query, vertical_data)
 
             # Call Azure OpenAI API with thinking enabled
             deployment = config["deployment"]
@@ -171,14 +173,16 @@ class AzureOpenAIIndependentClient:
         self,
         query: str,
         vertical: str,
+        vertical_data: Dict[str, Any] = None,
     ):
         """
-        Stream the thinking process and analysis result WITHOUT database context.
+        Stream the thinking process and analysis result with optional vertical context.
         This allows the frontend to see thinking as it happens.
 
         Args:
             query: User's query/question
-            vertical: Selected vertical/domain (for context only, not data)
+            vertical: Selected vertical/domain
+            vertical_data: Optional data structure containing capabilities, processes, etc.
 
         Yields:
             Tuple of (chunk_type, content) where chunk_type is 'thinking' or 'result'
@@ -190,7 +194,7 @@ class AzureOpenAIIndependentClient:
             system_prompt = self._create_system_prompt(vertical)
             # Store the system prompt for logging
             self._last_system_prompt = system_prompt
-            user_message = self._create_user_message(query)
+            user_message = self._create_user_message(query, vertical_data)
 
             deployment = config["deployment"]
             logger.info(f"Starting independent stream for query: {query[:50]}... (Deployment: {deployment})")
@@ -263,33 +267,103 @@ class AzureOpenAIIndependentClient:
             raise
 
     def _create_system_prompt(self, vertical: str) -> str:
-        """Create system prompt for independent thinking WITHOUT database context"""
+        """Create system prompt for independent thinking with optional context"""
         return f"""You are an expert consultant analyzing business capabilities and processes in the {vertical} domain.
 
 Your task is to:
 1. First, think through the user's query step by step
-2. Analyze the relevant capabilities and processes using any reliable external resources
+2. Analyze the relevant capabilities and processes using the provided data and external knowledge
 3. Identify the most relevant matches to the user's intent
 4. Provide comprehensive insights based on all available information
 
-If data is not available from any source, explicitly state "This information is not available."
+If data is not available from the provided source, explicitly state "This information is not available."
 
 Structure your response as:
 <thinking>
-[Your step-by-step reasoning process - reference reputable external sources]
+[Your step-by-step reasoning process - reference data provided and external sources]
 </thinking>
 
-[Your final analysis and recommendations - cite specific entities and elements from your sources]
+[Your final analysis and recommendations - cite specific entities and elements from the data]
 
 Be thorough in your thinking but concise in your final answer."""
 
-    def _create_user_message(self, query: str) -> str:
-        """Create the user message"""
-        return f"""Please provide your independent analysis for this query:
+    def _create_user_message(self, query: str, vertical_data: Dict[str, Any] = None) -> str:
+        """Create the user message with optional vertical context"""
+        if vertical_data:
+            # Build context from vertical data similar to thinking LLM
+            context = self._build_context_string(vertical_data)
+            return f"""Based on the following vertical data:
+{context}
+
+Please provide your independent analysis for this query:
+
+{query}
+
+Use your domain expertise, the provided data, and external knowledge."""
+        else:
+            return f"""Please provide your independent analysis for this query:
 
 {query}
 
 Use your domain expertise and knowledge."""
+
+    def _build_context_string(self, vertical_data: Dict[str, Any]) -> str:
+        """Build a context string from vertical data for the LLM"""
+        try:
+            context_parts = []
+            
+            if isinstance(vertical_data, dict):
+                # Build hierarchical structure: Capability -> Process -> SubProcess
+                if "capabilities" in vertical_data and vertical_data["capabilities"]:
+                    context_parts.append("=== BUSINESS CAPABILITIES HIERARCHY ===\n")
+                    
+                    for cap in vertical_data["capabilities"]:
+                        if isinstance(cap, dict):
+                            cap_name = cap.get('name', 'Unknown')
+                            cap_desc = cap.get('description', '')
+                            context_parts.append(f"\nCapability: {cap_name}")
+                            if cap_desc:
+                                context_parts.append(f"  Description: {cap_desc}")
+                            
+                            # Get processes for this capability
+                            cap_processes = cap.get('processes', [])
+                            
+                            if cap_processes:
+                                context_parts.append("  └─ Processes:")
+                                for proc in cap_processes:
+                                    if isinstance(proc, dict):
+                                        proc_name = proc.get('name', 'Unknown')
+                                        proc_level = proc.get('level', 'unknown')
+                                        proc_desc = proc.get('description', '')
+                                        context_parts.append(f"      ├─ {proc_name} (Level: {proc_level})")
+                                        if proc_desc:
+                                            context_parts.append(f"         │  Description: {proc_desc}")
+                                        
+                                        # Get subprocesses for this process
+                                        proc_subprocesses = proc.get('subprocesses', [])
+                                        
+                                        if proc_subprocesses:
+                                            context_parts.append(f"         │  └─ SubProcesses:")
+                                            for idx, subproc in enumerate(proc_subprocesses):
+                                                if isinstance(subproc, dict):
+                                                    subproc_name = subproc.get('name', 'Unknown')
+                                                    context_parts.append(f"         │     ├─ {subproc_name}")
+                                                    if subproc.get('application'):
+                                                        context_parts.append(f"         │        Application: {subproc.get('application')}")
+                                                    if subproc.get('api'):
+                                                        context_parts.append(f"         │        API: {subproc.get('api')}")
+            
+            context_text = "\n".join(context_parts)
+            
+            # Limit context to reasonable size
+            max_context_length = 50000
+            if len(context_text) > max_context_length:
+                return context_text[:max_context_length]
+            return context_text if context_text else "No vertical data available"
+            
+        except Exception as e:
+            logger.warning(f"Error building context string: {e}")
+            return "No vertical data available"
 
     def _parse_response(self, response_text: str) -> Tuple[str, str]:
         """Parse the LLM response into thinking and result sections"""

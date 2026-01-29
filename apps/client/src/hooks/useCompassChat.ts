@@ -173,6 +173,10 @@ export const useCompassChat = (): UseCompassChatReturn => {
         
         setDualMessages((prev) => [...prev, dualMessage]);
 
+        // Variables to store responses for logging
+        let withDbData: any = null;
+        let independentData: any = null;
+
         // Send both requests in parallel but update UI as each completes
         const withDbPromise = fetch('/api/chat/compass', {
           method: 'POST',
@@ -211,7 +215,8 @@ export const useCompassChat = (): UseCompassChatReturn => {
             }
             return response.json();
           })
-          .then((withDbData) => {
+          .then((data) => {
+            withDbData = data;
             const withDbMessage: ChatMessage = {
               id: `agent-with-db-${messageId}`,
               type: 'agent',
@@ -250,7 +255,8 @@ export const useCompassChat = (): UseCompassChatReturn => {
             }
             return response.json();
           })
-          .then((independentData) => {
+          .then((data) => {
+            independentData = data;
             const independentAgentMessage: ChatMessage = {
               id: `agent-independent-${messageId}`,
               type: 'agent',
@@ -271,6 +277,11 @@ export const useCompassChat = (): UseCompassChatReturn => {
                   : msg
               )
             );
+
+            // Both responses are now complete, log them together
+            if (withDbData && independentData) {
+              logDualResponses(query, vertical, withDbData, independentData);
+            }
 
             // Stop loading only after both responses complete
             setIsLoading(false);
@@ -295,6 +306,40 @@ export const useCompassChat = (): UseCompassChatReturn => {
     },
     []
   );
+
+  const logDualResponses = async (
+    query: string,
+    vertical: string,
+    withDbData: any,
+    independentData: any
+  ) => {
+    try {
+      // Extract system prompts and context from the response data
+      const systemPromptCompass = withDbData.system_prompt_compass || '';
+      const systemPromptIndependent = independentData.system_prompt_independent || '';
+      const contextData = withDbData.context_data || '';
+      
+      await fetch('/api/chat/compass/log-dual', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query,
+          vertical,
+          system_prompt_compass: systemPromptCompass,
+          thinking_compass: withDbData.thinking || '',
+          response_compass: withDbData.result || '',
+          system_prompt_independent: systemPromptIndependent,
+          thinking_independent: independentData.thinking || '',
+          response_independent: independentData.result || '',
+          context_data: contextData,
+        }),
+      });
+    } catch (err) {
+      console.error('[useCompassChat] Failed to log dual responses:', err);
+    }
+  };
 
   const clearMessages = useCallback(() => {
     setMessages([]);
