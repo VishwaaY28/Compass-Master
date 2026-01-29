@@ -9,6 +9,7 @@ and returning both the agent's reasoning process and final results.
 import logging
 import json
 import os
+import time
 from typing import Dict, Any, Optional, List, Tuple
 from env import env
 from azure.identity import DefaultAzureCredential
@@ -36,38 +37,56 @@ class AzureOpenAIThinkingClient:
         self._last_system_prompt = None
 
     def _load_config(self) -> Dict[str, Any]:
-        """Load Azure OpenAI API configuration from Key Vault"""
+        """Load Azure OpenAI API configuration from Key Vault with retry logic"""
         if self._config is None:
             try:
-                # Initialize credential and Key Vault client
-                credential = DefaultAzureCredential()
-                key_vault_url = "https://fstodevazureopenai.vault.azure.net/"
-                kv_client = SecretClient(vault_url=key_vault_url, credential=credential)
+                # Retry configuration for credential initialization
+                max_retries = 3
+                retry_delay = 0.5  # Start with 0.5 seconds
+                last_error = None
                 
-                # Retrieve secrets from Key Vault
-                api_key = kv_client.get_secret("llm-api-key").value
-                endpoint = kv_client.get_secret("llm-base-endpoint").value
-                deployment = kv_client.get_secret("llm-mini").value
-                api_version = kv_client.get_secret("llm-mini-version").value
-                
-                # Strip whitespace from all values
-                api_key = api_key.strip() if api_key else None
-                endpoint = endpoint.strip() if endpoint else None
-                deployment = deployment.strip() if deployment else None
-                api_version = api_version.strip() if api_version else None
-                
-                if not all([api_key, endpoint, deployment, api_version]):
-                    logger.warning("One or more required Azure secrets are missing")
-                    logger.warning(f"API Key present: {bool(api_key)}, Endpoint: {bool(endpoint)}, Deployment: {bool(deployment)}, API Version: {bool(api_version)}")
-                    raise ValueError("Missing required Azure Key Vault secrets")
+                for attempt in range(max_retries):
+                    try:
+                        # Initialize credential and Key Vault client
+                        credential = DefaultAzureCredential()
+                        key_vault_url = "https://fstodevazureopenai.vault.azure.net/"
+                        kv_client = SecretClient(vault_url=key_vault_url, credential=credential)
+                        
+                        # Retrieve secrets from Key Vault
+                        api_key = kv_client.get_secret("llm-api-key").value
+                        endpoint = kv_client.get_secret("llm-base-endpoint").value
+                        deployment = kv_client.get_secret("llm-mini").value
+                        api_version = kv_client.get_secret("llm-mini-version").value
+                        
+                        # Strip whitespace from all values
+                        api_key = api_key.strip() if api_key else None
+                        endpoint = endpoint.strip() if endpoint else None
+                        deployment = deployment.strip() if deployment else None
+                        api_version = api_version.strip() if api_version else None
+                        
+                        if not all([api_key, endpoint, deployment, api_version]):
+                            logger.warning(f"One or more required Azure secrets are missing (attempt {attempt + 1}/{max_retries})")
+                            logger.warning(f"API Key present: {bool(api_key)}, Endpoint: {bool(endpoint)}, Deployment: {bool(deployment)}, API Version: {bool(api_version)}")
+                            raise ValueError("Missing required Azure Key Vault secrets")
 
-                self._config = {
-                    "api_key": api_key,
-                    "endpoint": endpoint,
-                    "deployment": deployment,
-                    "api_version": api_version,
-                }
-                logger.info(f"Azure OpenAI config loaded - Endpoint: {endpoint}, Deployment: {deployment}, API Version: {api_version}")
+                        self._config = {
+                            "api_key": api_key,
+                            "endpoint": endpoint,
+                            "deployment": deployment,
+                            "api_version": api_version,
+                        }
+                        logger.info(f"Azure OpenAI config loaded - Endpoint: {endpoint}, Deployment: {deployment}, API Version: {api_version}")
+                        break  # Success, exit retry loop
+                        
+                    except Exception as e:
+                        last_error = e
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Failed to load Azure config (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s: {e}")
+                            time.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
+                        else:
+                            logger.error(f"Failed to load Azure config after {max_retries} attempts: {e}")
+                            raise ValueError(f"Failed to load Azure configuration: {e}")
 
             except Exception as e:
                 logger.error(f"Error loading Azure Key Vault configuration: {e}")

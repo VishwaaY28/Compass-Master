@@ -7,6 +7,7 @@ from env import env
 import json
 import re
 import ast
+import time
 from utils.llm_call_logger import get_llm_call_logger
 
 try:
@@ -34,7 +35,7 @@ class AzureOpenAIClient:
         self.key_vault_url = "https://fstodevazureopenai.vault.azure.net/"
 
     def _load_config(self, settings: Optional[Dict[str, Any]] = None):
-        """Load API key and endpoint from Azure Key Vault"""
+        """Load API key and endpoint from Azure Key Vault with retry logic"""
         if self._config is None:
             kv_url = self.key_vault_url
             api_key = None
@@ -42,29 +43,49 @@ class AzureOpenAIClient:
             api_version = None
             model = None
             
-            credential = DefaultAzureCredential()
-            kvclient = SecretClient(vault_url=kv_url, credential=credential)
+            # Retry configuration for credential initialization
+            max_retries = 3
+            retry_delay = 0.5  # Start with 0.5 seconds
+            last_error = None
             
-            try:
-                # Load API key from Key Vault
-                api_key = kvclient.get_secret("llm-api-key").value
-                logger.info("API Key loaded from Key Vault")
-            except Exception as e:
-                logger.error(f"Failed to load API key from Key Vault: {e}")
-                raise ValueError(f"Failed to load API key from Key Vault: {e}")
-            
-            try:
-                # Load endpoint from Key Vault
-                endpoint_secret = kvclient.get_secret("llm-base-endpoint")
-                endpoint = endpoint_secret.value
-                api_version_secret = kvclient.get_secret("llm-mini-version")
-                api_version = api_version_secret.value
-                model_secret = kvclient.get_secret("llm-mini")
-                model = model_secret.value
-                logger.info("Endpoint loaded from Key Vault")
-            except Exception as e:
-                logger.warning(f"Failed to load endpoint from Key Vault: {e}; using default endpoint")
-                endpoint = "https://stg-secureapi.hexaware.com/api/azureai"
+            for attempt in range(max_retries):
+                try:
+                    credential = DefaultAzureCredential()
+                    kvclient = SecretClient(vault_url=kv_url, credential=credential)
+                    
+                    # Load API key from Key Vault
+                    try:
+                        api_key = kvclient.get_secret("llm-api-key").value
+                        logger.info(f"API Key loaded from Key Vault (attempt {attempt + 1}/{max_retries})")
+                    except Exception as e:
+                        logger.error(f"Failed to load API key from Key Vault (attempt {attempt + 1}/{max_retries}): {e}")
+                        raise ValueError(f"Failed to load API key from Key Vault: {e}")
+                    
+                    # Load endpoint from Key Vault
+                    try:
+                        endpoint_secret = kvclient.get_secret("llm-base-endpoint")
+                        endpoint = endpoint_secret.value
+                        api_version_secret = kvclient.get_secret("llm-mini-version")
+                        api_version = api_version_secret.value
+                        model_secret = kvclient.get_secret("llm-mini")
+                        model = model_secret.value
+                        logger.info("Endpoint loaded from Key Vault")
+                    except Exception as e:
+                        logger.warning(f"Failed to load endpoint from Key Vault: {e}; using default endpoint")
+                        endpoint = "https://stg-secureapi.hexaware.com/api/azureai"
+                    
+                    # If we got here, config loading succeeded
+                    break
+                    
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Failed to load Azure config (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s: {e}")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        logger.error(f"Failed to load Azure config after {max_retries} attempts: {e}")
+                        raise ValueError(f"Failed to load API key from Key Vault after {max_retries} attempts: {e}")
 
             # Use settings if provided, otherwise use defaults
             if settings:
