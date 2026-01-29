@@ -32,6 +32,7 @@ class AzureOpenAIIndependentClient:
     def __init__(self):
         self._client = None
         self._config = None
+        self._last_system_prompt = None
 
     def _load_config(self) -> Dict[str, Any]:
         """Load Azure OpenAI API configuration from Key Vault"""
@@ -103,6 +104,10 @@ class AzureOpenAIIndependentClient:
 
         return self._client
 
+    def get_last_system_prompt(self) -> str:
+        """Get the last system prompt used"""
+        return self._last_system_prompt or ""
+
     def think_and_analyze(
         self,
         query: str,
@@ -125,6 +130,8 @@ class AzureOpenAIIndependentClient:
 
             # Create system prompt for independent thinking
             system_prompt = self._create_system_prompt(vertical)
+            # Store the system prompt for logging
+            self._last_system_prompt = system_prompt
 
             # Create user message
             user_message = self._create_user_message(query)
@@ -181,6 +188,8 @@ class AzureOpenAIIndependentClient:
             config = self._load_config()
 
             system_prompt = self._create_system_prompt(vertical)
+            # Store the system prompt for logging
+            self._last_system_prompt = system_prompt
             user_message = self._create_user_message(query)
 
             deployment = config["deployment"]

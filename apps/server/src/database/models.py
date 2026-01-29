@@ -21,6 +21,7 @@ class Capability(TimestampMixin):
     name = fields.CharField(max_length=255)
     description = fields.TextField()
     subvertical = fields.ForeignKeyField('models.SubVertical', related_name='capabilities', null=True)
+    org_units = fields.TextField(null=True)
 
 class ProcessLevel(str, Enum):
     ENTERPRISE = "enterprise"

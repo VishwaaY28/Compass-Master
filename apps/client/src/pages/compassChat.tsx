@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import jsPDF from 'jspdf';
 import { useCompassChat, type ChatMessage } from '../hooks/useCompassChat';
 import { useCapabilityApi } from '../hooks/useCapability';
+import favicon from '../assets/favicon.png';
 
 interface Vertical {
   id: number;
@@ -90,6 +91,55 @@ const CompassChat: React.FC = () => {
       const maxWidth = pageWidth - 2 * margin;
       const lineHeight = 7;
 
+      // Helper function to clean and normalize text for PDF export
+      const cleanTextForPDF = (text: string): string => {
+        if (!text) return '';
+        
+        // First, decode HTML entities
+        const textArea = document.createElement('textarea');
+        textArea.innerHTML = text;
+        let decoded = textArea.value;
+        
+        // Remove any remaining HTML entities
+        decoded = decoded
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&#039;/g, "'")
+          .replace(/&[a-z]+;/g, ' ')
+          // Remove zero-width characters and other invisible characters
+          .replace(/[\u200B-\u200D\uFEFF]/g, '')
+          // Normalize whitespace but preserve meaningful spaces
+          .replace(/\s+/g, ' ')
+          .trim();
+        
+        return decoded;
+      };
+
+      // Helper function to safely split text for PDF
+      const splitTextSafely = (text: string, width: number): string[] => {
+        const cleanedText = cleanTextForPDF(text);
+        
+        // Use jsPDF's splitTextToSize but with better handling
+        try {
+          const lines = pdf.splitTextToSize(cleanedText, width);
+          // Ensure we don't have weird character splitting
+          return lines.map((line: string) => {
+            // If a line has excessive spaces/weird formatting, rejoin it
+            if (line.length > 2 && line.split(' ').some((word: string) => word.length === 1 && word !== 'a' && word !== 'I')) {
+              // This looks like character-by-character splitting, try to fix it
+              return line.split(' ').filter((w: string) => w.length > 0).join(' ');
+            }
+            return line;
+          });
+        } catch (e) {
+          console.warn('Error splitting text, returning as single line', e);
+          return [cleanedText];
+        }
+      };
+
       // Title
       pdf.setFontSize(16);
       pdf.setFont('helvetica', 'bold');
@@ -127,7 +177,7 @@ const CompassChat: React.FC = () => {
         pdf.setFontSize(10);
         pdf.setFont('helvetica', 'normal');
         pdf.setTextColor(50);
-        const userLines = pdf.splitTextToSize(dualMsg.userMessage.result, maxWidth);
+        const userLines = splitTextSafely(dualMsg.userMessage.result, maxWidth);
         pdf.text(userLines, margin + 5, yPosition);
         yPosition += userLines.length * lineHeight + 3;
 
@@ -135,7 +185,7 @@ const CompassChat: React.FC = () => {
           pdf.setFontSize(9);
           pdf.setFont('helvetica', 'normal');
           pdf.setTextColor(120);
-          pdf.text(`Vertical: ${dualMsg.userMessage.vertical}`, margin + 5, yPosition);
+          pdf.text(`Vertical: ${cleanTextForPDF(dualMsg.userMessage.vertical)}`, margin + 5, yPosition);
           yPosition += 7;
         }
 
@@ -164,10 +214,7 @@ const CompassChat: React.FC = () => {
             pdf.setFontSize(8);
             pdf.setFont('helvetica', 'normal');
             pdf.setTextColor(80);
-            const thinkingLines = pdf.splitTextToSize(
-              dualMsg.withDbResponse.thinking,
-              maxWidth - 10
-            );
+            const thinkingLines = splitTextSafely(dualMsg.withDbResponse.thinking, maxWidth - 10);
             
             // Handle page breaks for long thinking content
             for (let i = 0; i < thinkingLines.length; i++) {
@@ -191,10 +238,7 @@ const CompassChat: React.FC = () => {
             pdf.setFontSize(8);
             pdf.setFont('helvetica', 'normal');
             pdf.setTextColor(80);
-            const resultLines = pdf.splitTextToSize(
-              dualMsg.withDbResponse.result,
-              maxWidth - 10
-            );
+            const resultLines = splitTextSafely(dualMsg.withDbResponse.result, maxWidth - 10);
             
             // Handle page breaks for long result content
             for (let i = 0; i < resultLines.length; i++) {
@@ -234,10 +278,7 @@ const CompassChat: React.FC = () => {
             pdf.setFontSize(8);
             pdf.setFont('helvetica', 'normal');
             pdf.setTextColor(80);
-            const thinkingLines = pdf.splitTextToSize(
-              dualMsg.independentResponse.thinking,
-              maxWidth - 10
-            );
+            const thinkingLines = splitTextSafely(dualMsg.independentResponse.thinking, maxWidth - 10);
             
             // Handle page breaks for long thinking content
             for (let i = 0; i < thinkingLines.length; i++) {
@@ -261,10 +302,7 @@ const CompassChat: React.FC = () => {
             pdf.setFontSize(8);
             pdf.setFont('helvetica', 'normal');
             pdf.setTextColor(80);
-            const resultLines = pdf.splitTextToSize(
-              dualMsg.independentResponse.result,
-              maxWidth - 10
-            );
+            const resultLines = splitTextSafely(dualMsg.independentResponse.result, maxWidth - 10);
             
             // Handle page breaks for long result content
             for (let i = 0; i < resultLines.length; i++) {
@@ -289,7 +327,7 @@ const CompassChat: React.FC = () => {
       });
 
       // Save PDF
-      pdf.save(`compass-chat-${new Date().toISOString().split('T')[0]}.pdf`);
+      pdf.save(`compass-chat-${new Date().toLocaleString()}.pdf`);
       toast.success('Chat exported to PDF successfully!');
     } catch (err) {
       console.error('Failed to export PDF:', err);
@@ -300,8 +338,15 @@ const CompassChat: React.FC = () => {
   const renderMessage = (message: ChatMessage | undefined, messageId: string, side: 'db' | 'independent') => {
     if (!message) {
       return (
-        <div className="bg-gray-50 border border-gray-200 rounded-lg rounded-bl-none shadow-sm p-4 text-center">
-          <p className="text-sm text-gray-400">Waiting for response...</p>
+        <div className="space-y-3">
+          <div className="bg-gradient-to-r from-blue-50 to-blue-25 border border-blue-200 rounded-lg p-4 text-center">
+            <div className="flex items-center justify-center gap-2">
+              <FiLoader className="animate-spin text-blue-600" size={16} />
+              <p className="text-sm text-gray-600 font-medium">
+                {side === 'db' ? 'Analyzing with Compass context...' : 'Analyzing independently...'}
+              </p>
+            </div>
+          </div>
         </div>
       );
     }
@@ -408,8 +453,14 @@ const CompassChat: React.FC = () => {
       {/* Header */}
       <div className="bg-white border-b border-gray-200 shadow-sm p-4">
         <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+           {/* <img src={favicon} width={40} height={40} alt="favicon" /> */}
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Compass Chat</h1>
+              <h1 className="text-xl font-semibold">Compass Chat</h1>
+               <p className="text-xs text-muted-foreground">
+                  Resolve Your Organizational Queries
+               </p>
+          </div>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -503,17 +554,19 @@ const CompassChat: React.FC = () => {
               </div>
             ))}
 
-            {/* Loading Indicator */}
-            {isLoading && (
+            {/* Loading Indicator - Show only if there are no messages (first request) */}
+            {isLoading && dualMessages.length === 0 && (
               <div className="grid grid-cols-2 gap-4 max-w-6xl mt-6">
-                <div className="bg-white border border-gray-200 rounded-lg rounded-bl-none shadow-sm p-4">
+                <div className="bg-gradient-to-r from-blue-50 to-blue-25 border border-blue-200 rounded-lg shadow-sm p-4">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm text-gray-600">Analyzing with compass context...</p>
+                    <FiLoader className="animate-spin text-blue-600" size={18} />
+                    <p className="text-sm text-gray-700 font-medium">LLM answering using Capability Compass context...</p>
                   </div>
                 </div>
-                <div className="bg-white border border-gray-200 rounded-lg rounded-bl-none shadow-sm p-4">
+                <div className="bg-gradient-to-r from-purple-50 to-purple-25 border border-purple-200 rounded-lg shadow-sm p-4">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm text-gray-600">Independent analysis...</p>
+                    <FiLoader className="animate-spin text-purple-600" size={18} />
+                    <p className="text-sm text-gray-700 font-medium">LLM answering without using Capability Compass context...</p>
                   </div>
                 </div>
               </div>
@@ -525,56 +578,60 @@ const CompassChat: React.FC = () => {
       </div>
 
       {/* Input Area */}
-      <div className="bg-white border-t border-gray-200 p-4 shadow-lg">
-        <form onSubmit={handleSendMessage} className="space-y-3">
-          {/* Vertical Selector */}
-          <div className="flex items-center gap-3">
-            <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Vertical:</label>
-            <div className="relative flex-1 max-w-sm">
-              <select
-                value={selectedVertical}
-                onChange={(e) => setSelectedVertical(e.target.value)}
-                disabled={isLoadingVerticals || verticals.length === 0}
-                className="w-full px-4 py-2 bg-white border border-gray-300 rounded-lg text-gray-900 appearance-none cursor-pointer hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
-              >
-                <option value="">Choose a vertical...</option>
-                {verticals.map((v) => (
-                  <option key={v.id} value={v.name}>
-                    {v.name}
-                  </option>
-                ))}
-              </select>
-              <FiChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" />
-            </div>
-          </div>
+      <div className="border-t border-gray-200 p-4 md:p-5">
+        <form onSubmit={handleSendMessage}>
+          <div className="max-w-4xl mx-auto">
+            {/* Main Input Container */}
+            <div className="relative bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg hover:border-gray-300 transition-all duration-200 focus-within:shadow-xl focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-200 flex items-center">
+              {/* Vertical Selector - Left Side */}
+              <div className="flex items-center h-full px-4 border-r border-gray-200">
+                <div className="relative">
+                  <select
+                    value={selectedVertical}
+                    onChange={(e) => setSelectedVertical(e.target.value)}
+                    disabled={isLoadingVerticals || verticals.length === 0}
+                    className="appearance-none bg-transparent text-gray-900 font-medium cursor-pointer pr-6 focus:outline-none text-sm md:text-base min-w-max hover:text-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <option value="">Select Vertical</option>
+                    {verticals.map((v) => (
+                      <option key={v.id} value={v.name}>
+                        {v.name}
+                      </option>
+                    ))}
+                  </select>
+                  <FiChevronDown className="absolute right-0 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-sm" />
+                </div>
+              </div>
 
-          {/* Message Input */}
-          <div className="flex gap-3">
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Ask about capabilities, processes, or business operations..."
-              disabled={isLoading || !selectedVertical}
-              className="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
-            />
-            <button
-              type="submit"
-              disabled={isLoading || !selectedVertical || !query.trim()}
-              className="px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {isLoading ? (
-                <>
-                  <FiLoader className="animate-spin" size={18} />
-                  <span className="hidden sm:inline">Analyzing...</span>
-                </>
-              ) : (
-                <>
-                  <FiSend size={18} />
-                  <span className="hidden sm:inline">Send</span>
-                </>
-              )}
-            </button>
+              {/* Input Field - Left Start */}
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={selectedVertical ? "Ask about capabilities, processes, or business operations..." : "Select a vertical to start..."}
+                disabled={isLoading || !selectedVertical}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !isLoading && selectedVertical && query.trim()) {
+                    handleSendMessage(e as any);
+                  }
+                }}
+                className="w-full px-4 py-4 pl-4 pr-16 bg-transparent text-gray-900 placeholder-gray-400 focus:outline-none text-sm md:text-base disabled:placeholder-gray-300 disabled:cursor-not-allowed"
+              />
+
+              {/* Send Button - Right Side */}
+              <button
+                type="submit"
+                disabled={isLoading || !selectedVertical || !query.trim()}
+                className="px-4 py-2 text-gray-400 hover:text-blue-600 disabled:text-gray-300 disabled:hover:text-gray-300 transition-colors duration-200 disabled:cursor-not-allowed hover:bg-blue-50 rounded-lg mr-2"
+                title={isLoading ? "Analyzing..." : "Send message (Enter)"}
+              >
+                {isLoading ? (
+                  <FiLoader className="animate-spin" size={20} />
+                ) : (
+                  <FiSend size={20} className={`${!selectedVertical || !query.trim() ? 'opacity-50' : 'opacity-100'}`} />
+                )}
+              </button>
+            </div>
           </div>
         </form>
       </div>

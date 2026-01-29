@@ -14,6 +14,7 @@ from utils.llm2 import gemini_client
 from utils.llmthinking import azure_openai_thinking_client
 from utils.llm_independent import azure_openai_independent_client
 from utils.csv_export import get_csv_exporter
+from utils.llm_logger import log_llm_call
 from config.llm_settings import llm_settings_manager
 import io
 import csv
@@ -516,6 +517,23 @@ async def research_capabilities(payload: ResearchRequest):
                 })
 
         logger.info(f"[Research] Response payload items: {len(result)}, Types: {[r.get('type', 'unknown') for r in result]}")
+        
+        # Log the LLM call to CSV
+        try:
+            # For research endpoint, we log the matching data as response
+            response_str = json.dumps(matching_data) if matching_data else json.dumps(result[:500])  # Limit to first 500 items
+            # Thinking is the LLM prompt we sent
+            thinking_str = llm_prompt[:1000] if 'llm_prompt' in locals() else ""
+            log_llm_call(
+                vertical="research",
+                user_query=query,
+                llm_thinking=thinking_str,
+                llm_response=response_str,
+                system_prompt=""
+            )
+        except Exception as log_error:
+            logger.error(f"[Research] Failed to log LLM call: {log_error}")
+        
         return JSONResponse(result)
 
     except Exception as e:
@@ -1480,11 +1498,7 @@ async def generate_processes(payload: GenerateProcessRequest):
             logger.info(f"Saved {len(saved_processes)} processes to database")
         except Exception as e:
             logger.error(f"Error saving processes to database: {str(e)}", exc_info=True)
-            # Don't fail the entire request if database save fails, just log it
-        
-        # Return the LLM-generated data directly without restrictive parsing
-        # The LLM is already given process_type constraint, so let it generate freely
-        
+
         return {
             "status": "success",
             "message": f"Generated processes for {payload.capability_name}",
@@ -1516,11 +1530,7 @@ async def compass_chat(payload: CompassChatRequest):
         vertical = next((v for v in all_verticals if v.name == vertical_name), None)
         if not vertical:
             raise HTTPException(status_code=404, detail=f"Vertical '{vertical_name}' not found")
-
-        # Build comprehensive vertical data context
         vertical_data = await _build_vertical_context(vertical)
-
-        # Use Azure OpenAI thinking client to analyze query
         thinking, result = azure_openai_thinking_client.think_and_analyze(
             query=query,
             vertical=vertical_name,
@@ -1528,6 +1538,20 @@ async def compass_chat(payload: CompassChatRequest):
         )
 
         logger.info(f"[CompassChat] Analysis complete")
+
+        # Log the LLM call to CSV
+        try:
+            result_str = json.dumps(result) if isinstance(result, dict) else str(result)
+            system_prompt = azure_openai_thinking_client.get_last_system_prompt() or ""
+            log_llm_call(
+                vertical=vertical_name,
+                user_query=query,
+                llm_thinking=thinking or "",
+                llm_response=result_str,
+                system_prompt=system_prompt
+            )
+        except Exception as log_error:
+            logger.error(f"[CompassChat] Failed to log LLM call: {log_error}")
 
         return {
             "status": "success",
@@ -1567,6 +1591,10 @@ async def compass_chat_stream(
         vertical_data = await _build_vertical_context(vertical_obj)
 
         async def generate():
+            thinking_parts = []
+            result_parts = []
+            current_section = None
+            
             try:
                 # Stream the thinking and result
                 for chunk_type, content in azure_openai_thinking_client.stream_think_and_analyze(
@@ -1574,6 +1602,14 @@ async def compass_chat_stream(
                     vertical=vertical,
                     vertical_data=vertical_data,
                 ):
+                    # Collect thinking and result parts for logging
+                    if chunk_type == "thinking":
+                        thinking_parts.append(content)
+                    elif chunk_type == "result":
+                        result_parts.append(content)
+                    
+                    current_section = chunk_type
+                    
                     # Send JSON-formatted chunks
                     chunk = {
                         "type": chunk_type,
@@ -1583,6 +1619,21 @@ async def compass_chat_stream(
 
                 # Send completion signal
                 yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+                
+                # Log the LLM call after streaming is complete
+                try:
+                    thinking_str = "".join(thinking_parts) if thinking_parts else ""
+                    result_str = "".join(result_parts) if result_parts else ""
+                    system_prompt = azure_openai_thinking_client.get_last_system_prompt() or ""
+                    log_llm_call(
+                        vertical=vertical,
+                        user_query=query,
+                        llm_thinking=thinking_str,
+                        llm_response=result_str,
+                        system_prompt=system_prompt
+                    )
+                except Exception as log_error:
+                    logger.error(f"[CompassChat Stream] Failed to log LLM call: {log_error}")
 
             except Exception as e:
                 logger.error(f"[CompassChat Stream] Error: {e}")
@@ -1637,88 +1688,100 @@ async def compass_chat_independent(payload: CompassChatRequest):
 
 
 async def _build_vertical_context(vertical) -> dict:
-    """Build comprehensive context data for a vertical including data entities and elements"""
+    """Build comprehensive hierarchical context data for a vertical: Capability -> Process -> SubProcess -> Data Entity -> Data Element"""
     try:
         # Get all subverticals for this vertical
         subverticals = await vertical.subverticals.all()
+        logger.info(f"[VerticalContext] Vertical: {vertical.name}, SubVerticals: {len(subverticals)}")
 
         capabilities_list = []
-        processes_list = []
-        subprocesses_list = []
-        data_entities_list = []
-        data_elements_list = []
 
         for subvert in subverticals:
             # Get capabilities for each subvertical
             capabilities = await subvert.capabilities.all()
+            logger.info(f"[VerticalContext] SubVertical: {subvert.name}, Capabilities: {len(capabilities)}")
 
             for cap in capabilities:
-                capabilities_list.append({
+                cap_data = {
                     "id": cap.id,
                     "name": cap.name,
                     "description": cap.description,
-                })
+                    "processes": []
+                }
 
                 # Get processes for each capability
                 processes = await cap.processes.all()
+                logger.info(f"[VerticalContext] Capability: {cap.name}, Processes: {len(processes)}")
+                
                 for proc in processes:
-                    processes_list.append({
+                    proc_data = {
                         "id": proc.id,
                         "name": proc.name,
                         "description": proc.description,
                         "category": proc.category,
                         "level": proc.level.value if hasattr(proc.level, 'value') else str(proc.level),
-                    })
+                        "subprocesses": []
+                    }
 
                     # Get subprocesses
                     subprocs = await proc.subprocesses.all()
+                    logger.info(f"[VerticalContext] Process: {proc.name}, SubProcesses: {len(subprocs)}")
+                    
                     for subproc in subprocs:
-                        subprocesses_list.append({
+                        subproc_data = {
                             "id": subproc.id,
                             "name": subproc.name,
                             "description": subproc.description,
                             "category": subproc.category,
                             "application": subproc.application,
                             "api": subproc.api,
-                            "parent_process_id": proc.id,
-                        })
+                            "data_entities": []
+                        }
 
                         # Get data entities for each subprocess
                         try:
                             data_entities = await subproc.data_entities.all()
+                            logger.info(f"[VerticalContext] SubProcess: {subproc.name}, Data Entities: {len(data_entities)}")
+                            
                             for data_entity in data_entities:
-                                data_entities_list.append({
-                                    "id": data_entity.id,
-                                    "name": data_entity.name,
-                                    "description": data_entity.description,
-                                    "parent_subprocess_id": subproc.id,
-                                })
+                                entity_data = {
+                                    "data_entity_name": data_entity.name,
+                                    "data_entity_description": data_entity.description,
+                                    "data_elements": []
+                                }
 
                                 # Get data elements for each data entity
                                 try:
                                     data_elements = await data_entity.data_elements.all()
+                                    logger.info(f"[VerticalContext] Data Entity: {data_entity.name}, Data Elements: {len(data_elements)}")
+                                    
                                     for data_element in data_elements:
-                                        data_elements_list.append({
-                                            "id": data_element.id,
-                                            "name": data_element.name,
-                                            "description": data_element.description,
-                                            "parent_data_entity_id": data_entity.id,
-                                            "parent_subprocess_id": subproc.id,
-                                        })
+                                        element_data = {
+                                            "data_element_name": data_element.name,
+                                            "data_element_description": data_element.description,
+                                        }
+                                        entity_data["data_elements"].append(element_data)
                                 except Exception as e:
                                     logger.warning(f"Error fetching data elements for entity {data_entity.id}: {e}")
+                                
+                                subproc_data["data_entities"].append(entity_data)
                         except Exception as e:
                             logger.warning(f"Error fetching data entities for subprocess {subproc.id}: {e}")
 
+                        proc_data["subprocesses"].append(subproc_data)
+
+                    cap_data["processes"].append(proc_data)
+
+                capabilities_list.append(cap_data)
+
+        logger.info(f"[VerticalContext] Total capabilities collected: {len(capabilities_list)}")
+        logger.info(f"[VerticalContext] Context: {json.dumps(capabilities_list, indent=2, default=str)[:2000]}")
+        
         return {
             "vertical_name": vertical.name,
-            "capabilities": capabilities_list,  # Limit for context
-            "processes": processes_list,
-            "subprocesses": subprocesses_list,
-            "data_entities": data_entities_list,
-            "data_elements": data_elements_list,
+            "capabilities": capabilities_list,
         }
 
     except Exception as e:
-        logger.warning(f"Error building vertical context: {e}")
-        return {"vertical_name": vertical.name}
+        logger.error(f"Error building vertical context: {e}", exc_info=True)
+        return {"vertical_name": vertical.name, "capabilities": []}
