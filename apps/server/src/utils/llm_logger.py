@@ -20,7 +20,7 @@ def ensure_csv_exists():
             os.makedirs(os.path.dirname(LLM_LOG_PATH), exist_ok=True)
             with open(LLM_LOG_PATH, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(['sno', 'date', 'time', 'vertical', 'system prompt', 'user query', 'llm thinking', 'llm response'])
+                writer.writerow(['sno', 'date', 'time', 'vertical', 'LLM request with compass', 'llm thinking', 'llm response', 'LLM request without compass', 'llm thinking', 'llm response'])
             logger.info(f"Created new Capability_Compass_LOG.csv at {LLM_LOG_PATH}")
     except Exception as e:
         logger.error(f"Error ensuring CSV exists at {LLM_LOG_PATH}: {e}")
@@ -40,16 +40,30 @@ def get_next_sno():
         return 1
 
 
-def log_llm_call(vertical: str, user_query: str, llm_thinking: str, llm_response: str, system_prompt: str = ""):
+def log_llm_call(
+    vertical: str,
+    user_query: str,
+    llm_thinking_compass: str,
+    llm_response_compass: str,
+    llm_thinking_independent: str,
+    llm_response_independent: str,
+    system_prompt_compass: str = "",
+    system_prompt_independent: str = "",
+    context_data: str = ""
+):
     """
-    Log an LLM call to the LLM_LOG.csv file
+    Log LLM calls for both compass and independent responses to the CSV file
     
     Args:
         vertical: The vertical/domain being queried
         user_query: The user's query
-        llm_thinking: The LLM's thinking process
-        llm_response: The LLM's final response
-        system_prompt: The system prompt used for the LLM call (optional)
+        llm_thinking_compass: The LLM's thinking process with compass context
+        llm_response_compass: The LLM's final response with compass context
+        llm_thinking_independent: The LLM's thinking process without compass context
+        llm_response_independent: The LLM's final response without compass context
+        system_prompt_compass: The system prompt used for compass LLM call (optional)
+        system_prompt_independent: The system prompt used for independent LLM call (optional)
+        context_data: The database context data (optional)
     """
     try:
         ensure_csv_exists()
@@ -58,16 +72,26 @@ def log_llm_call(vertical: str, user_query: str, llm_thinking: str, llm_response
         date_str = now.strftime("%Y-%m-%d")
         time_str = now.strftime("%H:%M:%S")
         sno = get_next_sno()
+        
+        # Combine request components for compass version
+        llm_request_compass = f"System Prompt: {system_prompt_compass}\n\nUser Query: {user_query}\n\nContext:\n{context_data}" if system_prompt_compass or context_data else f"User Query: {user_query}"
+        
+        # Combine request components for independent version
+        llm_request_independent = f"System Prompt: {system_prompt_independent}\n\nUser Query: {user_query}" if system_prompt_independent else f"User Query: {user_query}"
+        
         row = [
             sno,
             date_str,
             time_str,
             vertical or "",
-            system_prompt or "",
-            user_query or "",
-            llm_thinking or "",
-            llm_response or ""
+            llm_request_compass or "",
+            llm_thinking_compass or "",
+            llm_response_compass or "",
+            llm_request_independent or "",
+            llm_thinking_independent or "",
+            llm_response_independent or ""
         ]
+        
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -75,7 +99,7 @@ def log_llm_call(vertical: str, user_query: str, llm_thinking: str, llm_response
                     writer = csv.writer(f)
                     writer.writerow(row)
                 
-                logger.info(f"LLM call logged successfully (sno={sno}) to {LLM_LOG_PATH}")
+                logger.info(f"LLM calls logged successfully (sno={sno}) to {LLM_LOG_PATH}")
                 return
             except PermissionError as perm_error:
                 if attempt < max_retries - 1:

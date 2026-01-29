@@ -527,9 +527,13 @@ async def research_capabilities(payload: ResearchRequest):
             log_llm_call(
                 vertical="research",
                 user_query=query,
-                llm_thinking=thinking_str,
-                llm_response=response_str,
-                system_prompt=""
+                llm_thinking_compass=thinking_str,
+                llm_response_compass=response_str,
+                llm_thinking_independent="",
+                llm_response_independent="",
+                system_prompt_compass="",
+                system_prompt_independent="",
+                context_data=""
             )
         except Exception as log_error:
             logger.error(f"[Research] Failed to log LLM call: {log_error}")
@@ -1539,19 +1543,8 @@ async def compass_chat(payload: CompassChatRequest):
 
         logger.info(f"[CompassChat] Analysis complete")
 
-        # Log the LLM call to CSV
-        try:
-            result_str = json.dumps(result) if isinstance(result, dict) else str(result)
-            system_prompt = azure_openai_thinking_client.get_last_system_prompt() or ""
-            log_llm_call(
-                vertical=vertical_name,
-                user_query=query,
-                llm_thinking=thinking or "",
-                llm_response=result_str,
-                system_prompt=system_prompt
-            )
-        except Exception as log_error:
-            logger.error(f"[CompassChat] Failed to log LLM call: {log_error}")
+        # Get system prompt for frontend logging
+        system_prompt = azure_openai_thinking_client.get_last_system_prompt() or ""
 
         return {
             "status": "success",
@@ -1559,6 +1552,8 @@ async def compass_chat(payload: CompassChatRequest):
             "vertical": vertical_name,
             "thinking": thinking,
             "result": result,
+            "system_prompt_compass": system_prompt,
+            "context_data": json.dumps(vertical_data)[:10000] if vertical_data else "",
         }
 
     except HTTPException:
@@ -1617,23 +1612,19 @@ async def compass_chat_stream(
                     }
                     yield f"data: {json.dumps(chunk)}\n\n"
 
-                # Send completion signal
-                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+                # Send completion signal with metadata for logging
+                thinking_str = "".join(thinking_parts) if thinking_parts else ""
+                result_str = "".join(result_parts) if result_parts else ""
+                system_prompt = azure_openai_thinking_client.get_last_system_prompt() or ""
+                context_str = json.dumps(vertical_data)[:10000] if vertical_data else ""
                 
-                # Log the LLM call after streaming is complete
-                try:
-                    thinking_str = "".join(thinking_parts) if thinking_parts else ""
-                    result_str = "".join(result_parts) if result_parts else ""
-                    system_prompt = azure_openai_thinking_client.get_last_system_prompt() or ""
-                    log_llm_call(
-                        vertical=vertical,
-                        user_query=query,
-                        llm_thinking=thinking_str,
-                        llm_response=result_str,
-                        system_prompt=system_prompt
-                    )
-                except Exception as log_error:
-                    logger.error(f"[CompassChat Stream] Failed to log LLM call: {log_error}")
+                yield f"data: {json.dumps({
+                    'type': 'complete',
+                    'system_prompt_compass': system_prompt,
+                    'thinking_compass': thinking_str,
+                    'response_compass': result_str,
+                    'context_data': context_str
+                })}\n\n"
 
             except Exception as e:
                 logger.error(f"[CompassChat Stream] Error: {e}")
@@ -1653,22 +1644,35 @@ async def compass_chat_stream(
 @router.post("/chat/compass/independent")
 async def compass_chat_independent(payload: CompassChatRequest):
     """
-    Independent Compass Chat endpoint - Uses Azure OpenAI LLM to analyze user queries WITHOUT database context.
-    The LLM will rely on its own knowledge and reasoning instead of vertical data from the database.
+    Independent Compass Chat endpoint - Uses Azure OpenAI LLM to analyze user queries with optional context.
+    The LLM can leverage vertical data from the database but also uses its own knowledge and reasoning.
     Returns both the agent's thinking process and final analysis result.
     """
     try:
         query = payload.query
         vertical_name = payload.vertical
-        logger.info(f"[CompassChat Independent] Query: {query}, Vertical: {vertical_name} (no DB context)")
+        logger.info(f"[CompassChat Independent] Query: {query}, Vertical: {vertical_name}")
 
-        # Use independent Azure OpenAI client to analyze query WITHOUT database data
+        # Fetch vertical by name to get context
+        all_verticals = await vertical_repository.fetch_all_verticals()
+        vertical_obj = next((v for v in all_verticals if v.name == vertical_name), None)
+        
+        # Build vertical context if vertical exists
+        vertical_data = None
+        if vertical_obj:
+            vertical_data = await _build_vertical_context(vertical_obj)
+
+        # Use independent Azure OpenAI client to analyze query with optional vertical context
         thinking, result = azure_openai_independent_client.think_and_analyze(
             query=query,
             vertical=vertical_name,
+            vertical_data=vertical_data,
         )
 
         logger.info(f"[CompassChat Independent] Analysis complete")
+
+        # Get system prompt for frontend logging
+        system_prompt = azure_openai_independent_client.get_last_system_prompt() or ""
 
         return {
             "status": "success",
@@ -1676,6 +1680,7 @@ async def compass_chat_independent(payload: CompassChatRequest):
             "vertical": vertical_name,
             "thinking": thinking,
             "result": result,
+            "system_prompt_independent": system_prompt,
         }
 
     except HTTPException:
@@ -1684,6 +1689,55 @@ async def compass_chat_independent(payload: CompassChatRequest):
         logger.error(f"[CompassChat Independent] Error: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Failed to process independent compass chat: {str(e)}"
+        )
+
+
+class DualChatLoggingRequest(BaseModel):
+    query: str
+    vertical: str
+    system_prompt_compass: str
+    thinking_compass: str
+    response_compass: str
+    system_prompt_independent: str
+    thinking_independent: str
+    response_independent: str
+    context_data: Optional[str] = ""
+
+
+@router.post("/chat/compass/log-dual")
+async def log_dual_chat_responses(payload: DualChatLoggingRequest):
+    """
+    Log both compass and independent chat responses to CSV.
+    Called by frontend after both responses are received.
+    This ensures both responses appear on the same row in the CSV.
+    """
+    try:
+        logger.info(f"[DualChatLogging] Logging dual responses for query: {payload.query[:50]}...")
+        
+        # Log both responses together in a single row
+        log_llm_call(
+            vertical=payload.vertical,
+            user_query=payload.query,
+            llm_thinking_compass=payload.thinking_compass or "",
+            llm_response_compass=payload.response_compass or "",
+            llm_thinking_independent=payload.thinking_independent or "",
+            llm_response_independent=payload.response_independent or "",
+            system_prompt_compass=payload.system_prompt_compass or "",
+            system_prompt_independent=payload.system_prompt_independent or "",
+            context_data=payload.context_data or ""
+        )
+        
+        logger.info(f"[DualChatLogging] Dual responses logged successfully")
+        
+        return {
+            "status": "success",
+            "message": "Dual responses logged successfully"
+        }
+    
+    except Exception as e:
+        logger.error(f"[DualChatLogging] Error logging dual responses: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to log dual responses: {str(e)}"
         )
 
 

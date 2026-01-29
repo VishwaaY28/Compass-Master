@@ -343,7 +343,7 @@ const CompassChat: React.FC = () => {
             <div className="flex items-center justify-center gap-2">
               <FiLoader className="animate-spin text-blue-600" size={16} />
               <p className="text-sm text-gray-600 font-medium">
-                {side === 'db' ? 'Analyzing with Compass context...' : 'Analyzing independently...'}
+                {side === 'db' ? 'LLM answering using Capability Compass context...' : 'LLM answering without using Capability Compass context...'}
               </p>
             </div>
           </div>
