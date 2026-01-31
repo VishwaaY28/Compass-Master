@@ -26,7 +26,7 @@ const Sidebar: React.FC = () => {
 
   const navItems = [
     { label: 'Master Catalog', path: '/dashboard', icon: FiHome },
-    { label: 'LookItUp', path: '/dashboard/research-agent', icon: FiLayers },
+    { label: 'Look-It-Up', path: '/dashboard/research-agent', icon: FiLayers },
     { label: 'Compass Chat', path: '/dashboard/compass-chat', icon: FiMessageSquare },
     { label: 'View', path: '/dashboard/compass-view', icon: FiEye },
   ];

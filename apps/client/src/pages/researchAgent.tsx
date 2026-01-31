@@ -5,9 +5,9 @@ import { Building2, Search, Sparkles } from "lucide-react";
 import { FiChevronRight, FiChevronDown, FiLayers } from "react-icons/fi";
 
 const exampleQueries = [
-  "What are all the capabilities in private equity?",
-  "Show me the deal sourcing and evaluation process",
-  "What are the data entities involved in market mapping?",
+  "What are all the capabilities used to evaluate fund?",
+  "Show me the fund sourcing and evaluation process",
+  "What are the data entities involved in market research?",
   "Give me processes for KYC verification"
 ];
 
@@ -48,7 +48,7 @@ export default function ResearchAgent() {
             <div className="flex items-center gap-3">
              {/* <img src="/favicon.png" width ="40" height="40" /> */}
               <div>
-                <h1 className="text-xl font-semibold">LookItUp</h1>
+                <h1 className="text-xl font-semibold">Look-It-Up</h1>
                 <p className="text-xs text-muted-foreground">
                   AI-Driven Capability Finder
                 </p>

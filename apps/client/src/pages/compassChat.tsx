@@ -2,10 +2,25 @@ import React, { useState, useEffect, useRef } from 'react';
 import { FiSend, FiTrash2, FiChevronDown, FiLoader, FiDownload } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import toast from 'react-hot-toast';
-import jsPDF from 'jspdf';
+import pdfMake from 'pdfmake/build/pdfmake';
 import { useCompassChat, type ChatMessage } from '../hooks/useCompassChat';
 import { useCapabilityApi } from '../hooks/useCapability';
-import favicon from '../assets/favicon.png';
+
+// Initialize pdfMake (vfs is loaded from vfs_fonts automatically in build)
+let pdfMakeInitialized = false;
+
+const initializePdfMake = async () => {
+  if (pdfMakeInitialized) return;
+  try {
+    const vfsModule = await import('pdfmake/build/vfs_fonts');
+    if (vfsModule && (vfsModule as any).pdfMake?.vfs) {
+      (pdfMake as any).vfs = (vfsModule as any).pdfMake.vfs;
+    }
+    pdfMakeInitialized = true;
+  } catch (e) {
+    console.warn('Failed to load pdfmake fonts:', e);
+  }
+};
 
 interface Vertical {
   id: number;
@@ -81,253 +96,232 @@ const CompassChat: React.FC = () => {
     }));
   };
 
-  const exportToPDF = () => {
+  const exportToPDF = async () => {
     try {
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      let yPosition = 20;
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const margin = 15;
-      const maxWidth = pageWidth - 2 * margin;
-      const lineHeight = 7;
-
-      // Helper function to clean and normalize text for PDF export
-      const cleanTextForPDF = (text: string): string => {
+      await initializePdfMake();
+      // Helper function to clean text
+      const cleanText = (text: string): string => {
         if (!text) return '';
-        
-        // First, decode HTML entities
         const textArea = document.createElement('textarea');
         textArea.innerHTML = text;
-        let decoded = textArea.value;
-        
-        // Remove any remaining HTML entities
-        decoded = decoded
+        return textArea.value
           .replace(/&nbsp;/g, ' ')
           .replace(/&amp;/g, '&')
           .replace(/&lt;/g, '<')
           .replace(/&gt;/g, '>')
           .replace(/&quot;/g, '"')
           .replace(/&#039;/g, "'")
-          .replace(/&[a-z]+;/g, ' ')
-          // Remove zero-width characters and other invisible characters
           .replace(/[\u200B-\u200D\uFEFF]/g, '')
-          // Normalize whitespace but preserve meaningful spaces
           .replace(/\s+/g, ' ')
           .trim();
-        
-        return decoded;
       };
 
-      // Helper function to safely split text for PDF
-      const splitTextSafely = (text: string, width: number): string[] => {
-        const cleanedText = cleanTextForPDF(text);
-        
-        // Use jsPDF's splitTextToSize but with better handling
-        try {
-          const lines = pdf.splitTextToSize(cleanedText, width);
-          // Ensure we don't have weird character splitting
-          return lines.map((line: string) => {
-            // If a line has excessive spaces/weird formatting, rejoin it
-            if (line.length > 2 && line.split(' ').some((word: string) => word.length === 1 && word !== 'a' && word !== 'I')) {
-              // This looks like character-by-character splitting, try to fix it
-              return line.split(' ').filter((w: string) => w.length > 0).join(' ');
-            }
-            return line;
-          });
-        } catch (e) {
-          console.warn('Error splitting text, returning as single line', e);
-          return [cleanedText];
-        }
+      // Build document definition for pdfmake
+      const docDefinition: any = {
+        pageSize: 'A4',
+        pageMargins: [40, 40, 40, 40],
+        defaultStyle: {
+          font: 'Roboto',
+          lineHeight: 1.5,
+        },
+        content: [
+          {
+            text: 'Compass Chat Export',
+            fontSize: 18,
+            bold: true,
+            color: '#000000',
+            margin: [0, 0, 0, 10],
+          },
+          {
+            text: `Generated on: ${new Date().toLocaleString()}`,
+            fontSize: 10,
+            color: '#666666',
+            margin: [0, 0, 0, 15],
+          },
+          {
+            canvas: [
+              {
+                type: 'line',
+                x1: 0,
+                y1: 5,
+                x2: 515 - 80,
+                y2: 5,
+                lineWidth: 1,
+                lineColor: '#cccccc',
+              },
+            ],
+            margin: [0, 0, 0, 15],
+          },
+        ],
+        styles: {
+          userLabel: {
+            bold: true,
+            fontSize: 14,
+            color: '#000000',
+            margin: [0, 10, 0, 5],
+          },
+          userText: {
+            fontSize: 12,
+            color: '#333333',
+            margin: [10, 0, 0, 3],
+            alignment: 'justify',
+            lineHeight: 1.5,
+          },
+          verticalLabel: {
+            fontSize: 12,
+            color: '#666666',
+            margin: [10, 0, 0, 8],
+          },
+          dbLabel: {
+            bold: true,
+            fontSize: 14,
+            color: '#0066cc',
+            margin: [0, 10, 0, 5],
+          },
+          dbThinkingLabel: {
+            bold: true,
+            fontSize: 13,
+            color: '#3b82f6',
+            margin: [0, 5, 0, 3],
+          },
+          dbThinkingText: {
+            fontSize: 12,
+            color: '#505050',
+            margin: [15, 0, 0, 2],
+            alignment: 'justify',
+            lineHeight: 1.5,
+          },
+          dbAnalysisLabel: {
+            bold: true,
+            fontSize: 13,
+            color: '#059669',
+            margin: [0, 8, 0, 3],
+          },
+          dbAnalysisText: {
+            fontSize: 12,
+            color: '#505050',
+            margin: [15, 0, 0, 2],
+            alignment: 'justify',
+            lineHeight: 1.5,
+          },
+          independentLabel: {
+            bold: true,
+            fontSize: 12,
+            color: '#8b5cf6',
+            margin: [0, 10, 0, 5],
+          },
+          timestamp: {
+            fontSize: 9,
+            color: '#999999',
+            alignment: 'right',
+            margin: [0, 5, 0, 0],
+          },
+        },
       };
 
-      // Title
-      pdf.setFontSize(16);
-      pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(0, 0, 0);
-      pdf.text('Compass Chat Export', margin, yPosition);
-      yPosition += 15;
-
-      // Timestamp
-      pdf.setFontSize(10);
-      pdf.setFont('helvetica', 'normal');
-      pdf.setTextColor(100);
-      pdf.text(`Generated on: ${new Date().toLocaleString()}`, margin, yPosition);
-      yPosition += 12;
-
-      // Add separator line
-      pdf.setDrawColor(200);
-      pdf.line(margin, yPosition, pageWidth - margin, yPosition);
-      yPosition += 10;
-
-      // Add messages
+      // Add messages to the document
       dualMessages.forEach((dualMsg, msgIndex) => {
-        // Check if we need a new page
-        if (yPosition > pageHeight - 30) {
-          pdf.addPage();
-          yPosition = 20;
-        }
-
-        // User message
-        pdf.setFontSize(11);
-        pdf.setFont('helvetica', 'bold');
-        pdf.setTextColor(0, 0, 0);
-        pdf.text('You:', margin, yPosition);
-        yPosition += 7;
-
-        pdf.setFontSize(10);
-        pdf.setFont('helvetica', 'normal');
-        pdf.setTextColor(50);
-        const userLines = splitTextSafely(dualMsg.userMessage.result, maxWidth);
-        pdf.text(userLines, margin + 5, yPosition);
-        yPosition += userLines.length * lineHeight + 3;
+        // User Message
+        const content = docDefinition.content;
+        
+        content.push(
+          { text: 'You:', style: 'userLabel' },
+          { text: cleanText(dualMsg.userMessage.result), style: 'userText' }
+        );
 
         if (dualMsg.userMessage.vertical) {
-          pdf.setFontSize(9);
-          pdf.setFont('helvetica', 'normal');
-          pdf.setTextColor(120);
-          pdf.text(`Vertical: ${cleanTextForPDF(dualMsg.userMessage.vertical)}`, margin + 5, yPosition);
-          yPosition += 7;
+          content.push({
+            text: `Vertical: ${cleanText(dualMsg.userMessage.vertical)}`,
+            style: 'verticalLabel',
+          });
         }
-
-        yPosition += 5;
 
         // DB Response
         if (dualMsg.withDbResponse) {
-          if (yPosition > pageHeight - 30) {
-            pdf.addPage();
-            yPosition = 20;
-          }
-
-          pdf.setFontSize(11);
-          pdf.setFont('helvetica', 'bold');
-          pdf.setTextColor(0, 102, 204);
-          pdf.text('Using Capability Compass', margin + 5, yPosition);
-          yPosition += 7;
+          content.push({ text: 'Using Capability Compass', style: 'dbLabel' });
 
           if (dualMsg.withDbResponse.thinking) {
-            pdf.setFontSize(9);
-            pdf.setFont('helvetica', 'bold');
-            pdf.setTextColor(59, 130, 246);
-            pdf.text('Thinking Process:', margin + 10, yPosition);
-            yPosition += 6;
-
-            pdf.setFontSize(8);
-            pdf.setFont('helvetica', 'normal');
-            pdf.setTextColor(80);
-            const thinkingLines = splitTextSafely(dualMsg.withDbResponse.thinking, maxWidth - 10);
-            
-            // Handle page breaks for long thinking content
-            for (let i = 0; i < thinkingLines.length; i++) {
-              if (yPosition > pageHeight - 15) {
-                pdf.addPage();
-                yPosition = 20;
-              }
-              pdf.text(thinkingLines[i], margin + 10, yPosition);
-              yPosition += lineHeight - 1;
-            }
-            yPosition += 3;
+            content.push({
+              text: 'LLM Thinking Process:',
+              style: 'dbThinkingLabel',
+            });
+            content.push({
+              text: cleanText(dualMsg.withDbResponse.thinking),
+              style: 'dbThinkingText',
+            });
           }
 
           if (dualMsg.withDbResponse.result) {
-            pdf.setFontSize(9);
-            pdf.setFont('helvetica', 'bold');
-            pdf.setTextColor(5, 150, 105);
-            pdf.text('Analysis:', margin + 10, yPosition);
-            yPosition += 6;
-
-            pdf.setFontSize(8);
-            pdf.setFont('helvetica', 'normal');
-            pdf.setTextColor(80);
-            const resultLines = splitTextSafely(dualMsg.withDbResponse.result, maxWidth - 10);
-            
-            // Handle page breaks for long result content
-            for (let i = 0; i < resultLines.length; i++) {
-              if (yPosition > pageHeight - 15) {
-                pdf.addPage();
-                yPosition = 20;
-              }
-              pdf.text(resultLines[i], margin + 10, yPosition);
-              yPosition += lineHeight - 1;
-            }
-            yPosition += 3;
+            content.push({
+              text: 'LLM Response:',
+              style: 'dbAnalysisLabel',
+            });
+            content.push({
+              text: cleanText(dualMsg.withDbResponse.result),
+              style: 'dbAnalysisText',
+            });
           }
-
-          yPosition += 5;
         }
 
         // Independent Response
         if (dualMsg.independentResponse) {
-          if (yPosition > pageHeight - 30) {
-            pdf.addPage();
-            yPosition = 20;
-          }
-
-          pdf.setFontSize(11);
-          pdf.setFont('helvetica', 'bold');
-          pdf.setTextColor(139, 92, 246);
-          pdf.text('Without Capability Compass', margin + 5, yPosition);
-          yPosition += 7;
+          content.push({
+            text: 'Without Capability Compass',
+            style: 'independentLabel',
+          });
 
           if (dualMsg.independentResponse.thinking) {
-            pdf.setFontSize(9);
-            pdf.setFont('helvetica', 'bold');
-            pdf.setTextColor(59, 130, 246);
-            pdf.text('Thinking Process:', margin + 10, yPosition);
-            yPosition += 6;
-
-            pdf.setFontSize(8);
-            pdf.setFont('helvetica', 'normal');
-            pdf.setTextColor(80);
-            const thinkingLines = splitTextSafely(dualMsg.independentResponse.thinking, maxWidth - 10);
-            
-            // Handle page breaks for long thinking content
-            for (let i = 0; i < thinkingLines.length; i++) {
-              if (yPosition > pageHeight - 15) {
-                pdf.addPage();
-                yPosition = 20;
-              }
-              pdf.text(thinkingLines[i], margin + 10, yPosition);
-              yPosition += lineHeight - 1;
-            }
-            yPosition += 3;
+            content.push({
+              text: 'LLM Thinking Process:',
+              style: 'dbThinkingLabel',
+            });
+            content.push({
+              text: cleanText(dualMsg.independentResponse.thinking),
+              style: 'dbThinkingText',
+            });
           }
 
           if (dualMsg.independentResponse.result) {
-            pdf.setFontSize(9);
-            pdf.setFont('helvetica', 'bold');
-            pdf.setTextColor(5, 150, 105);
-            pdf.text('Analysis:', margin + 10, yPosition);
-            yPosition += 6;
-
-            pdf.setFontSize(8);
-            pdf.setFont('helvetica', 'normal');
-            pdf.setTextColor(80);
-            const resultLines = splitTextSafely(dualMsg.independentResponse.result, maxWidth - 10);
-            
-            // Handle page breaks for long result content
-            for (let i = 0; i < resultLines.length; i++) {
-              if (yPosition > pageHeight - 15) {
-                pdf.addPage();
-                yPosition = 20;
-              }
-              pdf.text(resultLines[i], margin + 10, yPosition);
-              yPosition += lineHeight - 1;
-            }
-            yPosition += 3;
+            content.push({
+              text: 'LLM Response:',
+              style: 'dbAnalysisLabel',
+            });
+            content.push({
+              text: cleanText(dualMsg.independentResponse.result),
+              style: 'dbAnalysisText',
+            });
           }
         }
 
         // Message separator
-        yPosition += 8;
         if (msgIndex < dualMessages.length - 1) {
-          pdf.setDrawColor(230);
-          pdf.line(margin, yPosition, pageWidth - margin, yPosition);
-          yPosition += 8;
+          content.push({
+            canvas: [
+              {
+                type: 'line',
+                x1: 0,
+                y1: 5,
+                x2: 515 - 80,
+                y2: 5,
+                lineWidth: 1,
+                lineColor: '#eeeeee',
+              },
+            ],
+            margin: [0, 15, 0, 15],
+          });
         }
+
+        // Timestamp
+        content.push({
+          text: new Date(dualMsg.userMessage.timestamp || Date.now()).toLocaleTimeString(),
+          style: 'timestamp',
+        });
       });
 
-      // Save PDF
-      pdf.save(`compass-chat-${new Date().toLocaleString()}.pdf`);
+      // Generate and download PDF
+      pdfMake.createPdf(docDefinition).download(
+        `compass-chat-${new Date().toLocaleString().replace(/[/:]/g, '-')}.pdf`
+      );
       toast.success('Chat exported to PDF successfully!');
     } catch (err) {
       console.error('Failed to export PDF:', err);
