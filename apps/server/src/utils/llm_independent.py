@@ -291,98 +291,30 @@ class AzureOpenAIIndependentClient:
 
 Your task is to:
 1. First, think through the user's query step by step
-2. Analyze the relevant capabilities and processes using the provided data and external knowledge
-3. Identify the most relevant matches to the user's intent
+2. Analyze the relevant capabilities and processes using your external knowledge
+3. Identify the most relevant answers to the user's intent
 4. Provide comprehensive insights based on all available information
 
-If data is not available from the provided source, explicitly state "This information is not available."
+If data is not available, explicitly state "This information is not available."
 
 Structure your response as:
 <thinking>
-[Your step-by-step reasoning process - reference data provided and external sources]
+[Your step-by-step reasoning process - reference external sources]
 </thinking>
 
-[Your final analysis and recommendations - cite specific entities and elements from the data]
+[Your final analysis and recommendations - cite specific entities and elements]
 
 Be thorough in your thinking but concise in your final answer."""
 
     def _create_user_message(self, query: str, vertical_data: Dict[str, Any] = None) -> str:
         """Create the user message with optional vertical context"""
-        if vertical_data:
-            # Build context from vertical data similar to thinking LLM
-            context = self._build_context_string(vertical_data)
-            return f"""Based on the following vertical data:
-{context}
-
+        return f"""
 Please provide your independent analysis for this query:
 
 {query}
 
-Use your domain expertise, the provided data, and external knowledge."""
-        else:
-            return f"""Please provide your independent analysis for this query:
+Use your domain expertise and external knowledge."""
 
-{query}
-
-Use your domain expertise and knowledge."""
-
-    def _build_context_string(self, vertical_data: Dict[str, Any]) -> str:
-        """Build a context string from vertical data for the LLM"""
-        try:
-            context_parts = []
-            
-            if isinstance(vertical_data, dict):
-                # Build hierarchical structure: Capability -> Process -> SubProcess
-                if "capabilities" in vertical_data and vertical_data["capabilities"]:
-                    context_parts.append("=== BUSINESS CAPABILITIES HIERARCHY ===\n")
-                    
-                    for cap in vertical_data["capabilities"]:
-                        if isinstance(cap, dict):
-                            cap_name = cap.get('name', 'Unknown')
-                            cap_desc = cap.get('description', '')
-                            context_parts.append(f"\nCapability: {cap_name}")
-                            if cap_desc:
-                                context_parts.append(f"  Description: {cap_desc}")
-                            
-                            # Get processes for this capability
-                            cap_processes = cap.get('processes', [])
-                            
-                            if cap_processes:
-                                context_parts.append("  └─ Processes:")
-                                for proc in cap_processes:
-                                    if isinstance(proc, dict):
-                                        proc_name = proc.get('name', 'Unknown')
-                                        proc_level = proc.get('level', 'unknown')
-                                        proc_desc = proc.get('description', '')
-                                        context_parts.append(f"      ├─ {proc_name} (Level: {proc_level})")
-                                        if proc_desc:
-                                            context_parts.append(f"         │  Description: {proc_desc}")
-                                        
-                                        # Get subprocesses for this process
-                                        proc_subprocesses = proc.get('subprocesses', [])
-                                        
-                                        if proc_subprocesses:
-                                            context_parts.append(f"         │  └─ SubProcesses:")
-                                            for idx, subproc in enumerate(proc_subprocesses):
-                                                if isinstance(subproc, dict):
-                                                    subproc_name = subproc.get('name', 'Unknown')
-                                                    context_parts.append(f"         │     ├─ {subproc_name}")
-                                                    if subproc.get('application'):
-                                                        context_parts.append(f"         │        Application: {subproc.get('application')}")
-                                                    if subproc.get('api'):
-                                                        context_parts.append(f"         │        API: {subproc.get('api')}")
-            
-            context_text = "\n".join(context_parts)
-            
-            # Limit context to reasonable size
-            max_context_length = 50000
-            if len(context_text) > max_context_length:
-                return context_text[:max_context_length]
-            return context_text if context_text else "No vertical data available"
-            
-        except Exception as e:
-            logger.warning(f"Error building context string: {e}")
-            return "No vertical data available"
 
     def _parse_response(self, response_text: str) -> Tuple[str, str]:
         """Parse the LLM response into thinking and result sections"""
