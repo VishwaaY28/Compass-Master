@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from routes.upload_routes import router as upload_router
 from routes.subtree_routes import router as subtree_router
 from routes.intent_routes import router as intent_router
-
+from routes.query_execution_routes import router as query_execution_router
 app = FastAPI(title="Neo4J Capability API", description="API for managing capabilities, processes, and subprocesses in Neo4j")
 
 app.add_middleware(
@@ -34,7 +34,7 @@ def root():
 app.include_router(upload_router)
 app.include_router(subtree_router)
 app.include_router(intent_router)
-
+app.include_router(query_execution_router)
 
 if __name__ == "__main__":
     import uvicorn
