@@ -7,6 +7,7 @@ export interface ChatMessage {
   result: string;
   timestamp: string; // Store as string for JSON serialization
   vertical?: string;
+  vmo_meta?: any;
 }
 
 export interface DualColumnMessage {
@@ -130,6 +131,7 @@ export const useCompassChat = (): UseCompassChatReturn => {
           type: 'agent',
           thinking: data.thinking,
           result: data.result,
+          vmo_meta: data.vmo_meta,
           timestamp: new Date().toISOString(),
           vertical,
         };
@@ -222,6 +224,8 @@ export const useCompassChat = (): UseCompassChatReturn => {
               type: 'agent',
               thinking: withDbData.thinking,
               result: withDbData.result,
+              // Attach VMO metadata returned by the server (if present)
+              vmo_meta: withDbData.vmo_meta,
               timestamp: new Date().toISOString(),
               vertical,
             };

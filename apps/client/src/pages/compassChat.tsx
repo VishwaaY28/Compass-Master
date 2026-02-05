@@ -27,6 +27,7 @@ interface Vertical {
   name: string;
 }
 
+
 const CompassChat: React.FC = () => {
   const [query, setQuery] = useState('');
   const [selectedVertical, setSelectedVertical] = useState<string>('');
@@ -34,6 +35,7 @@ const CompassChat: React.FC = () => {
   const [showThinking, setShowThinking] = useState<{ [key: string]: boolean }>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isLoadingVerticals, setIsLoadingVerticals] = useState(true);
+  const [vmoMeta, setVmoMeta] = useState<any>(null);
 
   const { dualMessages, isLoading, error, sendDualMessage, clearMessages } = useCompassChat();
   const { listVerticals } = useCapabilityApi();
@@ -71,6 +73,34 @@ const CompassChat: React.FC = () => {
     }
   }, [error]);
 
+  // Poll VMO metadata (persona/tone/intent/primary anchors) for display
+  useEffect(() => {
+    let mounted = true;
+    const fetchMeta = async () => {
+      try {
+        const res = await fetch('/api/vmo/meta');
+        if (!res.ok) {
+          logger.debug(`VMO metadata fetch returned ${res.status}`);
+          return;
+        }
+        const data = await res.json();
+        if (mounted) setVmoMeta(data);
+      } catch (err) {
+        // ignore network errors silently; metadata is optional
+        if (mounted) {
+          logger.debug('Failed to fetch VMO metadata:', err);
+        }
+      }
+    };
+
+    fetchMeta();
+    const iv = setInterval(fetchMeta, 3000);
+    return () => {
+      mounted = false;
+      clearInterval(iv);
+    };
+  }, []);
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -99,6 +129,7 @@ const CompassChat: React.FC = () => {
   const exportToPDF = async () => {
     try {
       await initializePdfMake();
+      
       // Helper function to clean text
       const cleanText = (text: string): string => {
         if (!text) return '';
@@ -114,6 +145,378 @@ const CompassChat: React.FC = () => {
           .replace(/[\u200B-\u200D\uFEFF]/g, '')
           .replace(/\s+/g, ' ')
           .trim();
+      };
+
+      // Helper function to parse thinking text into formatted content
+      const parseThinkingText = (text: string): any[] => {
+        const content: any[] = [];
+        const paragraphs = text.split('\n\n');
+        
+        paragraphs.forEach((para) => {
+          const lines = para.trim().split('\n');
+          let currentList: any[] = [];
+          let isNumberedList = false;
+          
+          lines.forEach((line) => {
+            const trimmedLine = line.trim();
+            
+            if (!trimmedLine) {
+              // End current list if exists
+              if (currentList.length > 0) {
+                if (isNumberedList) {
+                  content.push({
+                    ol: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                } else {
+                  content.push({
+                    ul: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                }
+                currentList = [];
+              }
+              return;
+            }
+            
+            // Handle bullet points
+            if (trimmedLine.match(/^[-•*]\s+/)) {
+              if (isNumberedList && currentList.length > 0) {
+                // Switch from numbered to bullet list
+                content.push({
+                  ol: currentList,
+                  margin: [0, 2, 0, 2],
+                });
+                currentList = [];
+              }
+              isNumberedList = false;
+              const bulletText = trimmedLine.replace(/^[-•*]\s+/, '');
+              currentList.push({
+                text: cleanText(bulletText),
+                fontSize: 11,
+                color: '#505050',
+              });
+            }
+            // Handle numbered lists
+            else if (trimmedLine.match(/^\d+[.)]\s+/)) {
+              if (!isNumberedList && currentList.length > 0) {
+                // Switch from bullet to numbered list
+                content.push({
+                  ul: currentList,
+                  margin: [0, 2, 0, 2],
+                });
+                currentList = [];
+              }
+              isNumberedList = true;
+              const match = trimmedLine.match(/^\d+[.)]\s+(.*)/);
+              if (match) {
+                currentList.push({
+                  text: cleanText(match[1]),
+                  fontSize: 11,
+                  color: '#505050',
+                });
+              }
+            }
+            // Handle headers (lines ending with colon or all caps)
+            else if (trimmedLine.endsWith(':') || (trimmedLine.length > 3 && trimmedLine === trimmedLine.toUpperCase())) {
+              // End current list if exists
+              if (currentList.length > 0) {
+                if (isNumberedList) {
+                  content.push({
+                    ol: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                } else {
+                  content.push({
+                    ul: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                }
+                currentList = [];
+              }
+              content.push({
+                text: cleanText(trimmedLine),
+                fontSize: 12,
+                bold: true,
+                color: '#333333',
+                margin: [0, 8, 0, 4],
+              });
+            }
+            // Regular text
+            else {
+              // End current list if exists
+              if (currentList.length > 0) {
+                if (isNumberedList) {
+                  content.push({
+                    ol: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                } else {
+                  content.push({
+                    ul: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                }
+                currentList = [];
+              }
+              content.push({
+                text: cleanText(trimmedLine),
+                fontSize: 11,
+                color: '#505050',
+                alignment: 'justify',
+                margin: [0, 2, 0, 2],
+              });
+            }
+          });
+          
+          // End list at end of paragraph
+          if (currentList.length > 0) {
+            if (isNumberedList) {
+              content.push({
+                ol: currentList,
+                margin: [0, 2, 0, 2],
+              });
+            } else {
+              content.push({
+                ul: currentList,
+                margin: [0, 2, 0, 2],
+              });
+            }
+          }
+        });
+        
+        return content;
+      };
+
+      // Helper function to parse response text into formatted content (supports markdown-like formatting)
+      const parseResponseText = (text: string): any[] => {
+        const content: any[] = [];
+        const paragraphs = text.split('\n\n');
+        
+        paragraphs.forEach((para) => {
+          const lines = para.trim().split('\n');
+          let currentList: any[] = [];
+          let isNumberedList = false;
+          
+          lines.forEach((line) => {
+            const trimmedLine = line.trim();
+            
+            if (!trimmedLine) {
+              // End current list if exists
+              if (currentList.length > 0) {
+                if (isNumberedList) {
+                  content.push({
+                    ol: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                } else {
+                  content.push({
+                    ul: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                }
+                currentList = [];
+              }
+              return;
+            }
+            
+            // Handle markdown headers (## h2, ### h3, etc.)
+            if (trimmedLine.match(/^#{1,6}\s+/)) {
+              // End current list if exists
+              if (currentList.length > 0) {
+                if (isNumberedList) {
+                  content.push({
+                    ol: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                } else {
+                  content.push({
+                    ul: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                }
+                currentList = [];
+              }
+              
+              const match = trimmedLine.match(/^(#{1,6})\s+(.*)/);
+              if (match) {
+                const headerLevel = match[1].length;
+                const headerText = match[2];
+                const fontSizes = { 1: 16, 2: 14, 3: 13, 4: 12, 5: 11, 6: 10 };
+                content.push({
+                  text: cleanText(headerText),
+                  fontSize: fontSizes[headerLevel] || 12,
+                  bold: true,
+                  color: '#1a1a1a',
+                  margin: [0, 8, 0, 4],
+                });
+              }
+            }
+            // Handle bullet points
+            else if (trimmedLine.match(/^[-•*]\s+/)) {
+              if (isNumberedList && currentList.length > 0) {
+                // Switch from numbered to bullet list
+                content.push({
+                  ol: currentList,
+                  margin: [0, 2, 0, 2],
+                });
+                currentList = [];
+              }
+              isNumberedList = false;
+              const bulletText = trimmedLine.replace(/^[-•*]\s+/, '');
+              currentList.push({
+                text: cleanText(bulletText),
+                fontSize: 11,
+                color: '#505050',
+              });
+            }
+            // Handle numbered lists
+            else if (trimmedLine.match(/^\d+[.)]\s+/)) {
+              if (!isNumberedList && currentList.length > 0) {
+                // Switch from bullet to numbered list
+                content.push({
+                  ul: currentList,
+                  margin: [0, 2, 0, 2],
+                });
+                currentList = [];
+              }
+              isNumberedList = true;
+              const match = trimmedLine.match(/^\d+[.)]\s+(.*)/);
+              if (match) {
+                currentList.push({
+                  text: cleanText(match[1]),
+                  fontSize: 11,
+                  color: '#505050',
+                });
+              }
+            }
+            // Handle bold text (**text**)
+            else if (trimmedLine.includes('**')) {
+              // End current list if exists
+              if (currentList.length > 0) {
+                if (isNumberedList) {
+                  content.push({
+                    ol: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                } else {
+                  content.push({
+                    ul: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                }
+                currentList = [];
+              }
+              
+              const parts: any[] = [];
+              const regex = /\*\*(.*?)\*\*|([^\*]+)/g;
+              let match;
+              while ((match = regex.exec(trimmedLine)) !== null) {
+                if (match[1]) {
+                  parts.push({
+                    text: cleanText(match[1]),
+                    bold: true,
+                    color: '#1a1a1a',
+                  });
+                } else if (match[2]) {
+                  parts.push(cleanText(match[2]));
+                }
+              }
+              content.push({
+                text: parts,
+                fontSize: 11,
+                color: '#505050',
+                alignment: 'justify',
+                margin: [0, 2, 0, 2],
+              });
+            }
+            // Handle inline code (`code`)
+            else if (trimmedLine.includes('`')) {
+              // End current list if exists
+              if (currentList.length > 0) {
+                if (isNumberedList) {
+                  content.push({
+                    ol: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                } else {
+                  content.push({
+                    ul: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                }
+                currentList = [];
+              }
+              
+              const parts: any[] = [];
+              const regex = /`(.*?)`|([^`]+)/g;
+              let match;
+              while ((match = regex.exec(trimmedLine)) !== null) {
+                if (match[1]) {
+                  parts.push({
+                    text: cleanText(match[1]),
+                    background: '#f0f0f0',
+                    color: '#1a1a1a',
+                    font: 'Courier',
+                    fontSize: 10,
+                  });
+                } else if (match[2]) {
+                  parts.push(cleanText(match[2]));
+                }
+              }
+              content.push({
+                text: parts,
+                fontSize: 11,
+                color: '#505050',
+                alignment: 'justify',
+                margin: [0, 2, 0, 2],
+              });
+            }
+            // Regular text
+            else {
+              // End current list if exists
+              if (currentList.length > 0) {
+                if (isNumberedList) {
+                  content.push({
+                    ol: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                } else {
+                  content.push({
+                    ul: currentList,
+                    margin: [0, 2, 0, 2],
+                  });
+                }
+                currentList = [];
+              }
+              
+              content.push({
+                text: cleanText(trimmedLine),
+                fontSize: 11,
+                color: '#505050',
+                alignment: 'justify',
+                margin: [0, 2, 0, 2],
+              });
+            }
+          });
+          
+          // End list at end of paragraph
+          if (currentList.length > 0) {
+            if (isNumberedList) {
+              content.push({
+                ol: currentList,
+                margin: [0, 2, 0, 2],
+              });
+            } else {
+              content.push({
+                ul: currentList,
+                margin: [0, 2, 0, 2],
+              });
+            }
+          }
+        });
+        
+        return content;
       };
 
       // Build document definition for pdfmake
@@ -182,27 +585,13 @@ const CompassChat: React.FC = () => {
             bold: true,
             fontSize: 13,
             color: '#3b82f6',
-            margin: [0, 5, 0, 3],
-          },
-          dbThinkingText: {
-            fontSize: 12,
-            color: '#505050',
-            margin: [15, 0, 0, 2],
-            alignment: 'justify',
-            lineHeight: 1.5,
+            margin: [0, 5, 0, 5],
           },
           dbAnalysisLabel: {
             bold: true,
             fontSize: 13,
             color: '#059669',
-            margin: [0, 8, 0, 3],
-          },
-          dbAnalysisText: {
-            fontSize: 12,
-            color: '#505050',
-            margin: [15, 0, 0, 2],
-            alignment: 'justify',
-            lineHeight: 1.5,
+            margin: [0, 8, 0, 5],
           },
           independentLabel: {
             bold: true,
@@ -236,6 +625,88 @@ const CompassChat: React.FC = () => {
           });
         }
 
+        // VMO Metadata Section (if available)
+        if (dualMsg.withDbResponse?.vmo_meta || vmoMeta) {
+          const metaData = dualMsg.withDbResponse?.vmo_meta || vmoMeta;
+          if (metaData) {
+            content.push({
+              fontSize: 11,
+              bold: true,
+              color: '#0066cc',
+              margin: [0, 8, 0, 4],
+            });
+
+            const metaTable = {
+              table: {
+                headerRows: 0,
+                widths: ['30%', '70%'],
+                body: [
+                  [
+                    {
+                      text: 'Persona',
+                      fontSize: 10,
+                      bold: true,
+                      color: '#ffffff',
+                      fillColor: '#0066cc',
+                      padding: [6, 4],
+                    },
+                    {
+                      text: metaData.persona || '-',
+                      fontSize: 10,
+                      color: '#333333',
+                      padding: [6, 4],
+                      fillColor: '#f5f5f5',
+                    },
+                  ],
+                  [
+                    {
+                      text: 'Intent',
+                      fontSize: 10,
+                      bold: true,
+                      color: '#ffffff',
+                      fillColor: '#0066cc',
+                      padding: [6, 4],
+                    },
+                    {
+                      text: metaData.intent || '-',
+                      fontSize: 10,
+                      color: '#333333',
+                      padding: [6, 4],
+                    },
+                  ],
+                  [
+                    {
+                      text: 'Primary Anchors',
+                      fontSize: 10,
+                      bold: true,
+                      color: '#ffffff',
+                      fillColor: '#0066cc',
+                      padding: [6, 4],
+                    },
+                    {
+                      text: Array.isArray(metaData.primary_anchors)
+                        ? metaData.primary_anchors.join(', ')
+                        : (metaData.primary_anchors || '-'),
+                      fontSize: 10,
+                      color: '#333333',
+                      padding: [6, 4],
+                      fillColor: '#f5f5f5',
+                    },
+                  ],
+                ],
+              },
+              layout: {
+                hLineWidth: () => 1,
+                vLineWidth: () => 1,
+                hLineColor: '#cccccc',
+                vLineColor: '#cccccc',
+              },
+              margin: [0, 0, 0, 8],
+            };
+            content.push(metaTable);
+          }
+        }
+
         // DB Response
         if (dualMsg.withDbResponse) {
           content.push({ text: 'Using Capability Compass', style: 'dbLabel' });
@@ -245,9 +716,12 @@ const CompassChat: React.FC = () => {
               text: 'LLM Thinking Process:',
               style: 'dbThinkingLabel',
             });
+            
+            // Parse and add formatted thinking content
+            const thinkingContent = parseThinkingText(dualMsg.withDbResponse.thinking);
             content.push({
-              text: cleanText(dualMsg.withDbResponse.thinking),
-              style: 'dbThinkingText',
+              stack: thinkingContent,
+              margin: [15, 0, 0, 10],
             });
           }
 
@@ -256,9 +730,12 @@ const CompassChat: React.FC = () => {
               text: 'LLM Response:',
               style: 'dbAnalysisLabel',
             });
+            
+            // Parse and add formatted response content
+            const responseContent = parseResponseText(dualMsg.withDbResponse.result);
             content.push({
-              text: cleanText(dualMsg.withDbResponse.result),
-              style: 'dbAnalysisText',
+              stack: responseContent,
+              margin: [15, 0, 0, 10],
             });
           }
         }
@@ -275,9 +752,12 @@ const CompassChat: React.FC = () => {
               text: 'LLM Thinking Process:',
               style: 'dbThinkingLabel',
             });
+            
+            // Parse and add formatted thinking content
+            const thinkingContent = parseThinkingText(dualMsg.independentResponse.thinking);
             content.push({
-              text: cleanText(dualMsg.independentResponse.thinking),
-              style: 'dbThinkingText',
+              stack: thinkingContent,
+              margin: [15, 0, 0, 10],
             });
           }
 
@@ -286,9 +766,12 @@ const CompassChat: React.FC = () => {
               text: 'LLM Response:',
               style: 'dbAnalysisLabel',
             });
+            
+            // Parse and add formatted response content
+            const responseContent = parseResponseText(dualMsg.independentResponse.result);
             content.push({
-              text: cleanText(dualMsg.independentResponse.result),
-              style: 'dbAnalysisText',
+              stack: responseContent,
+              margin: [15, 0, 0, 10],
             });
           }
         }
@@ -347,6 +830,8 @@ const CompassChat: React.FC = () => {
 
     const thinkingKey = `${messageId}-${side}`;
     const isThinkingVisible = showThinking[thinkingKey] || false;
+  // Prefer message-scoped VMO metadata (attached when response arrives). Fall back to global polled VMO meta.
+  const metaToShow = side === 'db' ? (message.vmo_meta || vmoMeta) : null;
 
     return (
       <div className="space-y-2">
@@ -355,32 +840,71 @@ const CompassChat: React.FC = () => {
           <div className="border border-blue-200 rounded-lg bg-gradient-to-r from-blue-50 to-blue-25 overflow-hidden">
             <button
               onClick={() => toggleThinking(messageId, side)}
-              className="w-full px-4 py-3 flex items-center justify-between hover:bg-blue-100 transition-colors group"
+              className="w-full px-5 py-4 flex items-center justify-between hover:bg-blue-100 transition-colors group"
             >
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
                 <span className={`text-blue-600 transition-transform ${isThinkingVisible ? 'rotate-180' : ''}`}>
                   ▼
                 </span>
-                <span className="text-sm font-bold text-black-700 group-hover:text-blue-800">
-                  LLM Thinking
+                <span className="text-base font-semibold text-gray-800 group-hover:text-blue-900">
+                  LLM Thinking Process
                 </span>
               </div>
-              <span className="text-xs text-blue-500">
+              <span className="text-xs font-medium text-blue-600 px-2 py-1 bg-blue-100 rounded">
                 {isThinkingVisible ? 'Hide' : 'Show'}
               </span>
             </button>
 
             {isThinkingVisible && (
-              <div className="border-t border-blue-200 px-4 py-4 bg-white">
-                <div className="text-sm text-gray-800 leading-relaxed space-y-3">
-                  <div className="prose prose-sm max-w-none dark:prose-invert">
-
-                    {message.thinking.split('\n\n').map((paragraph, idx) => (
-                      <p key={idx} className="whitespace-pre-wrap break-words mb-3 text-gray-900 font-normal">
-                        {paragraph}
-                      </p>
-                    ))}
-                  </div>
+              <div className="border-t border-blue-200 px-5 py-5 bg-white">
+                <div className="space-y-4">
+                  {message.thinking.split('\n\n').map((paragraph, idx) => {
+                    // Parse bullet points and numbered lists
+                    const lines = paragraph.trim().split('\n');
+                    return (
+                      <div key={idx} className="text-gray-700 leading-relaxed">
+                        {lines.map((line, lineIdx) => {
+                          const trimmedLine = line.trim();
+                          // Handle bullet points
+                          if (trimmedLine.match(/^[-•*]\s+/)) {
+                            return (
+                              <div key={lineIdx} className="flex gap-3 mb-2 text-base font-normal">
+                                <span className="text-blue-500 flex-shrink-0 mt-0.5">•</span>
+                                <span className="text-gray-700">{trimmedLine.replace(/^[-•*]\s+/, '')}</span>
+                              </div>
+                            );
+                          }
+                          // Handle numbered lists
+                          if (trimmedLine.match(/^\d+[.)]\s+/)) {
+                            const number = trimmedLine.match(/^\d+/)[0];
+                            return (
+                              <div key={lineIdx} className="flex gap-3 mb-2 text-base font-normal">
+                                <span className="text-blue-600 flex-shrink-0 font-semibold">{number}.</span>
+                                <span className="text-gray-700">{trimmedLine.replace(/^\d+[.)]\s+/, '')}</span>
+                              </div>
+                            );
+                          }
+                          // Handle headers (lines ending with colon or in caps)
+                          if (trimmedLine.endsWith(':') || (trimmedLine.length > 0 && trimmedLine === trimmedLine.toUpperCase() && trimmedLine.length > 3)) {
+                            return (
+                              <div key={lineIdx} className="font-semibold text-gray-900 text-base mb-2 mt-2">
+                                {trimmedLine}
+                              </div>
+                            );
+                          }
+                          // Regular text
+                          if (trimmedLine.length > 0) {
+                            return (
+                              <p key={lineIdx} className="text-gray-700 text-base leading-7 mb-2 font-normal">
+                                {trimmedLine}
+                              </p>
+                            );
+                          }
+                          return null;
+                        })}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -388,54 +912,148 @@ const CompassChat: React.FC = () => {
         )}
 
         {/* Result Section */}
-        <div className="bg-gradient-to-r from-gray-50 to-gray-25 border border-gray-200 rounded-lg p-5">
-<span className="text-sm font-bold text-black-700 group-hover:text-blue-800">
-                  LLM Response
-                </span>
-          <div className="text-sm text-gray-800 leading-relaxed prose prose-sm max-w-none dark:prose-invert">
-            <ReactMarkdown
-              components={{
-                p: ({ children }) => <p className="mb-3 leading-7">{children}</p>,
-                h1: ({ children }) => <h1 className="text-2xl font-bold mb-4 mt-5 text-gray-900">{children}</h1>,
-                h2: ({ children }) => <h2 className="text-lg font-bold mb-3 mt-4 text-gray-900">{children}</h2>,
-                h3: ({ children }) => <h3 className="text-base font-bold mb-2 mt-3 text-gray-900">{children}</h3>,
-                ul: ({ children }) => <ul className="list-disc list-inside mb-3 ml-2 space-y-1">{children}</ul>,
-                ol: ({ children }) => <ol className="list-decimal list-inside mb-3 ml-2 space-y-1">{children}</ol>,
-                li: ({ children }) => <li className="mb-1.5 ml-1">{children}</li>,
-                code: ({ inline, children }: any) =>
-                  inline ? (
-                    <code className="text-gray-900 font-semibold">{children}</code>
-                  ) : (
-                    <code className="block bg-gray-900 text-gray-100 p-4 rounded-lg mb-3 overflow-x-auto text-xs font-mono border border-gray-700">
+        <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
+          <h4 className="text-base font-semibold text-gray-900 mb-4 pb-3 border-b border-gray-100">
+            LLM Response
+          </h4>
+          <div className="text-gray-800 leading-relaxed">
+            {/* Inline VMO metadata for the thinking LLM (db side) - shown before the result */}
+            {metaToShow && (
+              <div className="mb-5 p-4 bg-gradient-to-r from-gray-50 to-gray-25 rounded-lg border border-gray-200">
+                <div className="text-sm text-gray-700 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-gray-900">Persona:</span> 
+                    <span className="text-gray-700">{metaToShow.persona || '-'}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-gray-900">Intent:</span> 
+                    <span className="text-gray-700">{metaToShow.intent || '-'}</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="font-semibold text-gray-900 flex-shrink-0">Anchors:</span>
+                    <span className="text-gray-700">
+                      {Array.isArray(metaToShow.primary_anchors) ? metaToShow.primary_anchors.join(', ') : (metaToShow.primary_anchors || '-')}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="prose prose-sm prose-gray max-w-none font-inter">
+              <ReactMarkdown
+                components={{
+                  p: ({ children }) => (
+                    <p className="text-gray-800 mb-4 leading-7 text-base font-normal">
                       {children}
-                    </code>
+                    </p>
                   ),
-                blockquote: ({ children }) => (
-                  <blockquote className="border-l-4 border-blue-500 pl-4 italic text-gray-700 my-3 bg-blue-50 py-2 pr-4 rounded-r">{children}</blockquote>
-                ),
-                a: ({ href, children }) => (
-                  <a href={href} className="text-blue-600 hover:text-blue-700 underline hover:no-underline transition-colors" target="_blank" rel="noopener noreferrer">
-                    {children}
-                  </a>
-                ),
-                table: ({ children }) => (
-                  <table className="border-collapse border border-gray-300 w-full mb-3 rounded-lg overflow-hidden">{children}</table>
-                ),
-                tr: ({ children }) => <tr className="border border-gray-300 hover:bg-gray-100">{children}</tr>,
-                td: ({ children }) => <td className="border border-gray-300 px-3 py-2">{children}</td>,
-                th: ({ children }) => <th className="border border-gray-300 px-3 py-2 bg-gray-200 font-bold text-left">{children}</th>,
-                hr: () => <hr className="my-4 border-t border-gray-300" />,
-                strong: ({ children }) => <strong className="font-bold text-gray-900">{children}</strong>,
-                em: ({ children }) => <em className="italic text-gray-700">{children}</em>,
-              }}
-            >
-              {message.result}
-            </ReactMarkdown>
+                  h1: ({ children }) => (
+                    <h1 className="text-3xl font-bold mb-5 mt-6 text-gray-900 font-inter">
+                      {children}
+                    </h1>
+                  ),
+                  h2: ({ children }) => (
+                    <h2 className="text-2xl font-bold mb-4 mt-5 text-gray-900 font-inter">
+                      {children}
+                    </h2>
+                  ),
+                  h3: ({ children }) => (
+                    <h3 className="text-xl font-semibold mb-3 mt-4 text-gray-800 font-inter">
+                      {children}
+                    </h3>
+                  ),
+                  h4: ({ children }) => (
+                    <h4 className="text-lg font-semibold mb-3 mt-3 text-gray-800 font-inter">
+                      {children}
+                    </h4>
+                  ),
+                  ul: ({ children }) => (
+                    <ul className="list-disc list-outside mb-4 ml-5 space-y-2 text-gray-800">
+                      {children}
+                    </ul>
+                  ),
+                  ol: ({ children }) => (
+                    <ol className="list-decimal list-outside mb-4 ml-5 space-y-2 text-gray-800">
+                      {children}
+                    </ol>
+                  ),
+                  li: ({ children }) => (
+                    <li className="text-gray-800 text-base leading-7 mb-2">
+                      {children}
+                    </li>
+                  ),
+                  code: ({ inline, children }: any) =>
+                    inline ? (
+                      <code className="inline-block bg-gray-100 text-gray-900 px-2 py-1 rounded font-mono text-sm border border-gray-200">
+                        {children}
+                      </code>
+                    ) : (
+                      <pre className="block bg-gray-900 text-gray-100 p-4 rounded-lg mb-4 overflow-x-auto font-mono text-sm border border-gray-700">
+                        <code>
+                          {children}
+                        </code>
+                      </pre>
+                    ),
+                  blockquote: ({ children }) => (
+                    <blockquote className="border-l-4 border-blue-500 pl-4 italic text-gray-700 my-4 bg-blue-50 py-3 pr-4 rounded-r">
+                      {children}
+                    </blockquote>
+                  ),
+                  a: ({ href, children }) => (
+                    <a 
+                      href={href} 
+                      className="text-blue-600 hover:text-blue-700 underline transition-colors font-medium" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                    >
+                      {children}
+                    </a>
+                  ),
+                  table: ({ children }) => (
+                    <div className="overflow-x-auto mb-4">
+                      <table className="w-full border-collapse border border-gray-300 rounded-lg overflow-hidden">
+                        {children}
+                      </table>
+                    </div>
+                  ),
+                  tr: ({ children }) => (
+                    <tr className="border border-gray-300 hover:bg-gray-50 transition-colors">
+                      {children}
+                    </tr>
+                  ),
+                  td: ({ children }) => (
+                    <td className="border border-gray-300 px-4 py-3 text-gray-800 text-base">
+                      {children}
+                    </td>
+                  ),
+                  th: ({ children }) => (
+                    <th className="border border-gray-300 px-4 py-3 bg-gray-200 font-semibold text-left text-gray-900">
+                      {children}
+                    </th>
+                  ),
+                  hr: () => (
+                    <hr className="my-5 border-t border-gray-300" />
+                  ),
+                  strong: ({ children }) => (
+                    <strong className="font-bold text-gray-900">
+                      {children}
+                    </strong>
+                  ),
+                  em: ({ children }) => (
+                    <em className="italic text-gray-700">
+                      {children}
+                    </em>
+                  ),
+                }}
+              >
+                {message.result}
+              </ReactMarkdown>
+            </div>
           </div>
         </div>
 
         {/* Timestamp */}
-        <p className="text-xs text-gray-400 text-right px-2">
+        <p className="text-xs font-medium text-gray-500 text-right px-2 mt-3">
           {new Date(message.timestamp).toLocaleTimeString()}
         </p>
       </div>
@@ -521,6 +1139,7 @@ const CompassChat: React.FC = () => {
                           </h3>
                         </div>
                       </div>
+
                       {renderMessage(
                         dualMsg.withDbResponse,
                         dualMsg.id,

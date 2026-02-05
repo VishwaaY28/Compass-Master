@@ -109,7 +109,9 @@ async def seed_database():
             subprocess_name = get_column_value(row, 'Sub-Process', 'Subprocess', 'Sub Process', 'sub_process', 'sub-process')
             subprocess_desc = get_column_value(row, 'Sub-Process Description', 'Subprocess Description', 'Sub Process Desc', 'subprocess_description', 'subprocess_desc')
             data_entity_name = get_column_value(row, 'Data Entity', 'Data Entities', 'data_entity', 'data_entities')
+            data_entity_description = get_column_value(row, 'Data Entity Description', 'Data Entities', 'data_entity', 'data_entities')
             data_element_name = get_column_value(row, 'Data Element', 'Data Elements', 'Element', 'data_element', 'element')
+            data_element_description = get_column_value(row, 'Data Element Description', 'Data Elements', 'Element', 'data_element', 'element')
             application = get_column_value(row, 'Applications', 'App', 'System', 'application', 'app', 'system')
             api = get_column_value(row, 'API', 'APIs', 'Endpoints', 'api', 'apis', 'endpoints')
             
@@ -202,6 +204,7 @@ async def seed_database():
                     if data_entity_name and subprocess:
                         data_entity, de_created = await DataEntity.get_or_create(
                             name=data_entity_name,
+                            description=data_entity_description,
                             subprocess=subprocess
                         )
                         if de_created:
@@ -213,6 +216,7 @@ async def seed_database():
                         if data_element_name and data_entity:
                             data_element, del_created = await DataElement.get_or_create(
                                 name=data_element_name,
+                                description=data_element_description,
                                 data_entity=data_entity
                             )
                             if del_created:
