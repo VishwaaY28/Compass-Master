@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FiChevronLeft, FiChevronRight,FiEye, FiLogOut, FiHome, FiLayers, FiSettings, FiX, FiMessageSquare } from 'react-icons/fi';
+import { FiChevronLeft, FiChevronRight,FiEye, FiLogOut, FiHome, FiBarChart, FiLayers, FiSettings, FiX, FiMessageSquare } from 'react-icons/fi';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
@@ -26,9 +26,11 @@ const Sidebar: React.FC = () => {
 
   const navItems = [
     { label: 'Master Catalog', path: '/dashboard', icon: FiHome },
-    { label: 'Look-It-Up', path: '/dashboard/research-agent', icon: FiLayers },
     { label: 'Compass Chat', path: '/dashboard/compass-chat', icon: FiMessageSquare },
+    { label: 'Look-It-Up', path: '/dashboard/research-agent', icon: FiLayers },
     { label: 'View', path: '/dashboard/compass-view', icon: FiEye },
+    { label: 'Visualizer', path: '/dashboard/compass-visualizer', icon: FiBarChart },
+
   ];
 
   // Load current LLM settings on mount

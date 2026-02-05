@@ -23,6 +23,23 @@ import json
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
+@router.get("/vmo/meta")
+async def get_vmo_meta(request_id: Optional[str] = Query(None)):
+    """Return VMO metadata for a given request_id. If no request_id provided, returns empty dict.
+
+    Frontend should request metadata for the specific `request_id` returned with the LLM response
+    to avoid reading a global last-meta value that can be overwritten by other requests.
+    """
+    try:
+        # If request_id is not provided, return the last stored VMO meta to aid debugging/UI
+        meta = azure_openai_thinking_client.get_vmo_meta(request_id)
+        return JSONResponse(content=meta or {})
+    except Exception as e:
+        logger.error(f"Failed to get VMO meta for request_id={request_id}: {type(e).__name__}: {e}", exc_info=True)
+        # Return empty dict instead of 500 error since metadata is optional
+        return JSONResponse(content={}, status_code=200)
+
 class LLMProviderRequest(BaseModel):
     provider: str  # "azure", "gemini", or "secure"
 
@@ -533,7 +550,6 @@ async def research_capabilities(payload: ResearchRequest):
                 llm_response_independent="",
                 system_prompt_compass="",
                 system_prompt_independent="",
-                context_data=""
             )
         except Exception as log_error:
             logger.error(f"[Research] Failed to log LLM call: {log_error}")
@@ -1043,6 +1059,7 @@ async def list_capabilities():
             "description": c.description,
             "vertical": vertical_name,
             "subvertical": subvertical_name,
+            "org_units": getattr(c, "org_units", None),
             "processes": proc_list,
         })
 
@@ -1534,17 +1551,68 @@ async def compass_chat(payload: CompassChatRequest):
         vertical = next((v for v in all_verticals if v.name == vertical_name), None)
         if not vertical:
             raise HTTPException(status_code=404, detail=f"Vertical '{vertical_name}' not found")
+        # Build hierarchical vertical context (fallback) and also pre-run the Cypher
         vertical_data = await _build_vertical_context(vertical)
-        thinking, result = azure_openai_thinking_client.think_and_analyze(
-            query=query,
-            vertical=vertical_name,
-            vertical_data=vertical_data,
-        )
+
+        # Build a query plan and cypher locally then execute the cypher so we can pass the
+        # exact query result to the thinking client (ensures the LLM receives query result)
+        serialized_context_debug = ""
+        try:
+            plan_for_debug = azure_openai_thinking_client._create_query_plan(query, None)
+            cypher = azure_openai_thinking_client._generate_enterprise_query(plan_for_debug)
+            logger.debug(f"[CompassChat] Pre-running Cypher: {cypher[:400]}")
+            try:
+                db_query_result = azure_openai_thinking_client._default_db_fetch(cypher)
+                logger.debug(f"[CompassChat] Pre-fetched DB query result type={type(db_query_result)}")
+            except Exception as e:
+                logger.warning(f"[CompassChat] Pre-fetch DB query failed: {e}")
+                db_query_result = vertical_data  # fallback to hierarchical context
+
+            # Serialize the context (for debug and response) from the actual query result
+            try:
+                serialized_context_debug = azure_openai_thinking_client._serialize_db_records(db_query_result, plan_for_debug)
+                logger.debug(f"[CompassChat] Serialized context length={len(serialized_context_debug)} snippet={serialized_context_debug[:500]}")
+            except Exception:
+                serialized_context_debug = ""
+
+            # Pass the actual db_query_result into the thinking client as vertical_data so it is used directly
+            thinking, result, request_id = azure_openai_thinking_client.think_and_analyze(
+                query=query,
+                vertical=vertical_name,
+                vertical_data=db_query_result,
+            )
+        except Exception as e:
+            logger.warning(f"[CompassChat] Pre-query and think_and_analyze attempt failed: {e}")
+            # Fall back to calling the thinking client with the hierarchical context
+            thinking, result, request_id = azure_openai_thinking_client.think_and_analyze(
+                query=query,
+                vertical=vertical_name,
+                vertical_data=vertical_data,
+            )
 
         logger.info(f"[CompassChat] Analysis complete")
 
-        # Get system prompt for frontend logging
+        # Get system and user prompts for logging and frontend
         system_prompt = azure_openai_thinking_client.get_last_system_prompt() or ""
+        user_prompt = azure_openai_thinking_client.get_last_user_prompt() or ""
+
+        # Auto-log this compass chat (includes system prompt and user prompt)
+        try:
+            logger.debug(f"[CompassChat] System prompt length={len(system_prompt)} snippet={system_prompt[:300]}")
+            logger.debug(f"[CompassChat] User prompt length={len(user_prompt)} snippet={user_prompt[:300]}")
+            log_llm_call(
+                vertical=vertical_name,
+                user_query=query,
+                user_prompt=user_prompt,
+                llm_thinking_compass=thinking or "",
+                llm_response_compass=result or "",
+                llm_thinking_independent="",
+                llm_response_independent="",
+                system_prompt_compass=system_prompt or "",
+                system_prompt_independent="",
+            )
+        except Exception as e:
+            logger.warning(f"[CompassChat] Failed to auto-log LLM call: {e}")
 
         return {
             "status": "success",
@@ -1552,8 +1620,14 @@ async def compass_chat(payload: CompassChatRequest):
             "vertical": vertical_name,
             "thinking": thinking,
             "result": result,
+            "request_id": request_id,
             "system_prompt_compass": system_prompt,
-            "context_data": json.dumps(vertical_data)[:10000] if vertical_data else "",
+            # Include the VMO metadata (persona/tone/intent/anchors) so frontend
+            # can display it immediately without relying on a separate poll.
+            "vmo_meta": azure_openai_thinking_client.get_vmo_meta(request_id),
+            # Include a short serialized context snippet for debugging whether the LLM received context data
+            "context_snippet": (serialized_context_debug[:2000] if serialized_context_debug else ""),
+            "context_length": (len(serialized_context_debug) if serialized_context_debug else 0),
         }
 
     except HTTPException:
@@ -1592,11 +1666,33 @@ async def compass_chat_stream(
             
             try:
                 # Stream the thinking and result
-                for chunk_type, content in azure_openai_thinking_client.stream_think_and_analyze(
-                    query=query,
-                    vertical=vertical,
-                    vertical_data=vertical_data,
-                ):
+                # Pre-run the cypher query and pass the exact query result into the stream so
+                # the thinking client uses the query result as the context for the LLM.
+                try:
+                    plan_for_debug = azure_openai_thinking_client._create_query_plan(query, None)
+                    cypher = azure_openai_thinking_client._generate_enterprise_query(plan_for_debug)
+                    logger.debug(f"[CompassChat Stream] Pre-running Cypher: {cypher[:400]}")
+                    try:
+                        db_query_result = azure_openai_thinking_client._default_db_fetch(cypher)
+                        logger.debug(f"[CompassChat Stream] Pre-fetched DB result type={type(db_query_result)}")
+                    except Exception as e:
+                        logger.warning(f"[CompassChat Stream] Pre-fetch DB query failed: {e}")
+                        db_query_result = vertical_data
+
+                    stream_iterable = azure_openai_thinking_client.stream_think_and_analyze(
+                        query=query,
+                        vertical=vertical,
+                        vertical_data=db_query_result,
+                    )
+                except Exception as e:
+                    logger.warning(f"[CompassChat Stream] Pre-query failed, falling back to hierarchical vertical_data: {e}")
+                    stream_iterable = azure_openai_thinking_client.stream_think_and_analyze(
+                        query=query,
+                        vertical=vertical,
+                        vertical_data=vertical_data,
+                    )
+
+                for chunk_type, content in stream_iterable:
                     # Collect thinking and result parts for logging
                     if chunk_type == "thinking":
                         thinking_parts.append(content)
@@ -1616,14 +1712,41 @@ async def compass_chat_stream(
                 thinking_str = "".join(thinking_parts) if thinking_parts else ""
                 result_str = "".join(result_parts) if result_parts else ""
                 system_prompt = azure_openai_thinking_client.get_last_system_prompt() or ""
+                # Debug: include a short serialized context snippet to help frontend
+                try:
+                    plan_for_debug = azure_openai_thinking_client._create_query_plan(query, None)
+                    serialized_context_debug = azure_openai_thinking_client._serialize_db_records(vertical_data, plan_for_debug)
+                    logger.debug(f"[CompassChat Stream] Serialized context length={len(serialized_context_debug)} snippet={serialized_context_debug[:500]}")
+                except Exception:
+                    serialized_context_debug = ""
                 context_str = json.dumps(vertical_data)[:10000] if vertical_data else ""
-                
+                # Auto-log streamed chat completion to CSV
+                try:
+                    # Get user prompt from thinking client for logging
+                    user_prompt_str = azure_openai_thinking_client.get_last_user_prompt() or ""
+                    logger.debug(f"[CompassChat Stream] System prompt length={len(system_prompt)} snippet={system_prompt[:300]}")
+                    logger.debug(f"[CompassChat Stream] User prompt length={len(user_prompt_str)} snippet={user_prompt_str[:300]}")
+                    log_llm_call(
+                        vertical=vertical,
+                        user_query=query,
+                        user_prompt=user_prompt_str,
+                        llm_thinking_compass=thinking_str or "",
+                        llm_response_compass=result_str or "",
+                        llm_thinking_independent="",
+                        llm_response_independent="",
+                        system_prompt_compass=system_prompt or "",
+                        system_prompt_independent="",
+                        request_id=None,
+                    )
+                except Exception as e:
+                    logger.warning(f"[CompassChat Stream] Failed to auto-log LLM call: {e}")
+
                 yield f"data: {json.dumps({
                     'type': 'complete',
                     'system_prompt_compass': system_prompt,
                     'thinking_compass': thinking_str,
                     'response_compass': result_str,
-                    'context_data': context_str
+                    'context_snippet': (serialized_context_debug[:2000] if serialized_context_debug else ''),
                 })}\n\n"
 
             except Exception as e:
@@ -1696,6 +1819,7 @@ class DualChatLoggingRequest(BaseModel):
     query: str
     vertical: str
     system_prompt_compass: str
+    user_prompt: Optional[str] = ""
     thinking_compass: str
     response_compass: str
     system_prompt_independent: str
@@ -1714,18 +1838,23 @@ async def log_dual_chat_responses(payload: DualChatLoggingRequest):
     try:
         logger.info(f"[DualChatLogging] Logging dual responses for query: {payload.query[:50]}...")
         
-        # Log both responses together in a single row
-        log_llm_call(
-            vertical=payload.vertical,
-            user_query=payload.query,
-            llm_thinking_compass=payload.thinking_compass or "",
-            llm_response_compass=payload.response_compass or "",
-            llm_thinking_independent=payload.thinking_independent or "",
-            llm_response_independent=payload.response_independent or "",
-            system_prompt_compass=payload.system_prompt_compass or "",
-            system_prompt_independent=payload.system_prompt_independent or "",
-            context_data=payload.context_data or ""
-        )
+        # Log both responses together in a single row (update existing by request_id if available)
+        try:
+            logger.debug(f"[DualChatLogging] System prompt snippet: {str(payload.system_prompt_compass)[:300]}")
+            logger.debug(f"[DualChatLogging] User prompt snippet: {str(payload.user_prompt)[:300]}")
+            log_llm_call(
+                vertical=payload.vertical,
+                user_query=payload.query,
+                user_prompt=payload.user_prompt or "",
+                llm_thinking_compass=payload.thinking_compass or "",
+                llm_response_compass=payload.response_compass or "",
+                llm_thinking_independent=payload.thinking_independent or "",
+                llm_response_independent=payload.response_independent or "",
+                system_prompt_compass=payload.system_prompt_compass or "",
+                system_prompt_independent=payload.system_prompt_independent or "",
+            )
+        except Exception as e:
+            logger.warning(f"[DualChatLogging] Failed to log dual chat: {e}")
         
         logger.info(f"[DualChatLogging] Dual responses logged successfully")
         
@@ -1746,14 +1875,12 @@ async def _build_vertical_context(vertical) -> dict:
     try:
         # Get all subverticals for this vertical
         subverticals = await vertical.subverticals.all()
-        logger.info(f"[VerticalContext] Vertical: {vertical.name}, SubVerticals: {len(subverticals)}")
 
         capabilities_list = []
 
         for subvert in subverticals:
             # Get capabilities for each subvertical
             capabilities = await subvert.capabilities.all()
-            logger.info(f"[VerticalContext] SubVertical: {subvert.name}, Capabilities: {len(capabilities)}")
 
             for cap in capabilities:
                 cap_data = {
@@ -1765,8 +1892,7 @@ async def _build_vertical_context(vertical) -> dict:
 
                 # Get processes for each capability
                 processes = await cap.processes.all()
-                logger.info(f"[VerticalContext] Capability: {cap.name}, Processes: {len(processes)}")
-                
+
                 for proc in processes:
                     proc_data = {
                         "id": proc.id,
@@ -1779,8 +1905,7 @@ async def _build_vertical_context(vertical) -> dict:
 
                     # Get subprocesses
                     subprocs = await proc.subprocesses.all()
-                    logger.info(f"[VerticalContext] Process: {proc.name}, SubProcesses: {len(subprocs)}")
-                    
+
                     for subproc in subprocs:
                         subproc_data = {
                             "id": subproc.id,
@@ -1795,8 +1920,7 @@ async def _build_vertical_context(vertical) -> dict:
                         # Get data entities for each subprocess
                         try:
                             data_entities = await subproc.data_entities.all()
-                            logger.info(f"[VerticalContext] SubProcess: {subproc.name}, Data Entities: {len(data_entities)}")
-                            
+
                             for data_entity in data_entities:
                                 entity_data = {
                                     "data_entity_name": data_entity.name,
@@ -1807,8 +1931,7 @@ async def _build_vertical_context(vertical) -> dict:
                                 # Get data elements for each data entity
                                 try:
                                     data_elements = await data_entity.data_elements.all()
-                                    logger.info(f"[VerticalContext] Data Entity: {data_entity.name}, Data Elements: {len(data_elements)}")
-                                    
+
                                     for data_element in data_elements:
                                         element_data = {
                                             "data_element_name": data_element.name,
@@ -1828,9 +1951,7 @@ async def _build_vertical_context(vertical) -> dict:
 
                 capabilities_list.append(cap_data)
 
-        logger.info(f"[VerticalContext] Total capabilities collected: {len(capabilities_list)}")
-        logger.info(f"[VerticalContext] Context: {json.dumps(capabilities_list, indent=2, default=str)[:2000]}")
-        
+
         return {
             "vertical_name": vertical.name,
             "capabilities": capabilities_list,
