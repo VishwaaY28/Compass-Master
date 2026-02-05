@@ -29,7 +29,7 @@ def parse_csv_to_nested_json(csv_path: str) -> List[Dict[str, Any]]:
         uid_maps[entity_type][name] = uid_counters[entity_type]
         return uid_counters[entity_type]
 
-    with open(csv_path, 'r', encoding='utf-8') as f:
+    with open(csv_path, 'r', encoding='latin-1') as f:
         reader = csv.DictReader(f)
 
         for row in reader:
@@ -42,6 +42,8 @@ def parse_csv_to_nested_json(csv_path: str) -> List[Dict[str, Any]]:
             entity_desc = row.get('Data Entity Description', '').strip()
             element_name = row.get('Data Element', '').strip()
             element_desc = row.get('Data Element Description', '').strip()
+            org_units = row.get('Organization Units','').strip()
+            application = row.get('Applications','').strip()
 
             if not cap_name:
                 continue
