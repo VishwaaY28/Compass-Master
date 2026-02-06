@@ -14,6 +14,7 @@ from env import env
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
 from openai import AzureOpenAI
+from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +53,13 @@ class AzureOpenAIIndependentClient:
                         kv_client = SecretClient(vault_url=key_vault_url, credential=credential)
                         
                         # Retrieve secrets from Key Vault
-                        api_key = kv_client.get_secret("llm-api-key").value
-                        endpoint = kv_client.get_secret("llm-base-endpoint").value
-                        deployment = kv_client.get_secret("llm-mini").value
+                        # api_key = kv_client.get_secret("llm-api-key").value
+                        # endpoint = kv_client.get_secret("llm-base-endpoint").value
+                        # deployment = kv_client.get_secret("llm-mini").value
                         api_version = kv_client.get_secret("llm-mini-version").value
+                        api_key = kv_client.get_secret("kimi-preview-key").value
+                        endpoint = kv_client.get_secret("kimi-preview-endpoint").value
+                        deployment = "Kimi-K2-Thinking"
                         
                         # Strip whitespace from all values
                         api_key = api_key.strip() if api_key else None
@@ -104,20 +108,11 @@ class AzureOpenAIIndependentClient:
             
             # Ensure endpoint doesn't have trailing slashes or path
             endpoint = config["endpoint"]
-            if endpoint.endswith("/"):
-                endpoint = endpoint.rstrip("/")
-            # Remove any /openai/v1 or /openai paths that might be included
-            if "/openai/deployments" in endpoint:
-                endpoint = endpoint.split("/openai/deployments")[0]
-            elif "/openai" in endpoint:
-                endpoint = endpoint.split("/openai")[0]
-            
-            logger.info(f"Cleaned endpoint: {endpoint}")
-            
-            self._client = AzureOpenAI(
+            base_url = endpoint.split("/chat/completions")[0]
+
+            self._client = OpenAI(
                 api_key=config["api_key"],
-                api_version=config["api_version"],
-                azure_endpoint=endpoint
+                base_url=base_url
             )
             logger.info(f"Azure OpenAI client initialized successfully with endpoint: {endpoint}")
 
