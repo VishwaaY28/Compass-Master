@@ -8,7 +8,11 @@ from database.models import Vertical, SubVertical, Capability, Process, ProcessL
 logger = logging.getLogger(__name__)
 
 async def seed_database():
-    """Seed the database with PE capability data from CSV
+    """Seed the database with PE capability data from CSV files
+    
+    Seeds in order:
+    1. fund_mandate.csv - Fund mandate data
+    2. elements_fixed.csv - Elements and data structure data
     
     Automatically detects and handles these optional columns:
     - Vertical / Domain
@@ -30,27 +34,59 @@ async def seed_database():
     If a field is missing, it will be skipped gracefully.
     """
     
-    #Try multiple possible locations for the CSV
-    possible_paths = [
-         Path(__file__).parent.parent.parent / 'elements_fixed.csv',
-         Path(__file__).parent.parent.parent.parent / 'elements_fixed.csv',
-         Path('elements_fixed.csv'),
-     ]
-    # possible_paths = [
-    #     Path(__file__).parent.parent.parent / 'fund_mandate.csv',
-    #     Path(__file__).parent.parent.parent.parent / 'fund_mandate.csv',
-    #     Path('fund_mandate.csv'),
-    # ]
+    # Define CSV files to seed in order
+    csv_files_to_seed = [
+        {
+            'name': 'fund_mandate.csv',
+            'paths': [
+                Path(__file__).parent.parent.parent / 'fund_mandate.csv',
+                Path(__file__).parent.parent.parent.parent / 'fund_mandate.csv',
+                Path('fund_mandate.csv'),
+            ]
+        },
+        {
+            'name': 'elements_fixed.csv',
+            'paths': [
+                Path(__file__).parent.parent.parent / 'elements_fixed.csv',
+                Path(__file__).parent.parent.parent.parent / 'elements_fixed.csv',
+                Path('elements_fixed.csv'),
+            ]
+        }
+    ]
     
-    csv_path = None
-    for path in possible_paths:
-        if path.exists():
-            csv_path = path
-            break
+    # Seed each CSV file in order
+    for csv_file_config in csv_files_to_seed:
+        csv_name = csv_file_config['name']
+        possible_paths = csv_file_config['paths']
+        
+        csv_path = None
+        for path in possible_paths:
+            if path.exists():
+                csv_path = path
+                break
+        
+        if csv_path is None:
+            logger.warning(f"CSV file '{csv_name}' not found. Skipping.")
+            continue
+        
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Starting to seed from {csv_name}")
+        logger.info(f"{'='*60}")
+        
+        await _seed_from_csv(csv_path, csv_name)
     
-    if csv_path is None:
-        logger.warning("CSV file not found. Skipping seed.")
-        return
+    logger.info(f"\n{'='*60}")
+    logger.info("✓ All CSV files seeded successfully!")
+    logger.info(f"{'='*60}\n")
+
+
+async def _seed_from_csv(csv_path, csv_name: str):
+    """Internal function to seed database from a single CSV file
+    
+    Args:
+        csv_path: Path to the CSV file
+        csv_name: Name of the CSV file for logging purposes
+    """
     
     logger.info(f"Seeding database from {csv_path}")
     
