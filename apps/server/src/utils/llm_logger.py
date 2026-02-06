@@ -4,6 +4,12 @@ from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Request-scoped cache to preserve user_prompt across multiple LLM calls
+# This prevents the user_prompt from being lost when different clients are used
+_user_prompt_cache = {}
+_user_query_cache = {}
+
 def get_llm_log_path():
     """Get the absolute path to LLM_LOG.csv"""
     current_dir = os.path.dirname(os.path.abspath(__file__))  # apps/server/src/utils
@@ -84,6 +90,35 @@ def get_next_sno():
         return 1
 
 
+def cache_user_prompt(user_query: str, user_prompt: str):
+    """
+    Cache the user_prompt by user_query for persistence across multiple LLM calls.
+    This ensures the user_prompt (with full context) doesn't get lost between
+    compass and independent LLM calls which use different client instances.
+    """
+    if user_query and user_prompt:
+        _user_prompt_cache[user_query] = user_prompt
+        logger.debug(f"[CACHE] Cached user_prompt for query: {user_query[:50]}...")
+
+
+def get_cached_user_prompt(user_query: str) -> str:
+    """
+    Retrieve the cached user_prompt for a given user_query.
+    If not found, returns empty string.
+    """
+    prompt = _user_prompt_cache.get(user_query, "")
+    if prompt:
+        logger.debug(f"[CACHE] Retrieved cached user_prompt for query: {user_query[:50]}...")
+    return prompt
+
+
+def clear_user_prompt_cache(user_query: str):
+    """Clear the cached user_prompt for a given user_query after logging is complete."""
+    if user_query in _user_prompt_cache:
+        del _user_prompt_cache[user_query]
+        logger.debug(f"[CACHE] Cleared user_prompt cache for query: {user_query[:50]}...")
+
+
 def log_llm_call(
     vertical: str,
     user_query: str,
@@ -119,8 +154,14 @@ def log_llm_call(
         time_str = now.strftime("%H:%M:%S")
         sno = get_next_sno()
         
-        # Ensure user_prompt is set; fallback to user_query if empty
-        effective_user_prompt = user_prompt if user_prompt and user_prompt.strip() else user_query
+        # Try to use provided user_prompt, fallback to cache, then to user_query
+        effective_user_prompt = user_prompt if user_prompt and user_prompt.strip() else get_cached_user_prompt(user_query)
+        if not effective_user_prompt:
+            effective_user_prompt = user_query
+            
+        # Cache the user_prompt for subsequent calls (e.g., independent LLM logging)
+        if user_prompt and user_prompt.strip():
+            cache_user_prompt(user_query, user_prompt)
         
         # Combine request components for compass version (with full context)
         llm_request_compass = f"System Prompt: {system_prompt_compass}\n\n{effective_user_prompt}" if system_prompt_compass else effective_user_prompt
@@ -272,5 +313,10 @@ def log_llm_call(
                     logger.error(f"Failed to write to Capability_Compass_LOG.csv after {max_retries} attempts: {perm_error}")
                     logger.error(f"Attempted path: {LLM_LOG_PATH}")
                     raise
+        
+        # Clear cache after successful logging (when both compass and independent responses are logged)
+        if llm_thinking_independent or llm_response_independent:
+            clear_user_prompt_cache(user_query)
+            
     except Exception as e:
         logger.error(f"Error logging LLM call to CSV: {e}", exc_info=True)

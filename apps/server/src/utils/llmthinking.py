@@ -550,7 +550,7 @@ class AzureOpenAIThinkingClient:
     pass
 
     def _create_user_message(self, user_query: str, plan: Dict[str, Any], retrieved_graph_context: str, vertical: str) -> str:
-        persona_tone = plan.get("persona_tone", "Manager")
+        persona_tone = plan.get("persona_tone", "portfolio manager")
         display_anchor = ", ".join(plan.get("primary_anchors", []))
         intent = plan.get("intent", "Informational")
         """Create the user message with query and context"""
@@ -578,14 +578,14 @@ Provide both your thinking process and final analysis."""
     def _infer_persona(self, user_query: str) -> Tuple[str, int]:
         """
         Infer persona and depth from the user query when user_profile.role is absent.
-        Returns (persona, depth_scope) where persona is one of Executive|Manager|Investment Analyst
+        Returns (persona, depth_scope) where persona is one of Executive|portfolio manager|Investment Analyst
         and depth_scope is 1,2,3 respectively.
         Uses explicit persona keywords, DF_KNOWLEDGE presence, and intent heuristics.
         """
         q = (user_query or "").lower()
 
         exec_keys = [
-            "executive", "ceo", "cfo", "director", "vp", "vision", "strategy", "goal",
+            "executive", "ceo", "cfo", "director", "vp", "vision",
             "objective", "board", "stakeholder", "value", "kpi", "roi", "business value",
             "investment committee", "fund strategy", "performance objectives",
             "portfolio construction", "compliance", "regulatory", "risk appetite",
@@ -593,7 +593,7 @@ Provide both your thinking process and final analysis."""
         ]
 
         mgr_keys = [
-            "manager", "supervisor", "team lead", "owner", "process", "workflow", "steps",
+            "portfolio manager", "supervisor", "team lead", "owner", "process", "workflow", "steps",
             "how", "implement", "procedure", "operational", "policy", "deployment",
             "performance targets", "tracking error", "information ratio", "investor profile",
             "distribution policy", "fund accounting", "portfolio management",
@@ -605,19 +605,19 @@ Provide both your thinking process and final analysis."""
             "api", "data entity", "data element", "attribute", "schema", "lineage",
             "id", "technical", "aladdin", "blackrock", "performance measurement team",
             "portfolio analytics", "fund valuation", "data element description",
-            "prospectus", "objective statement"
+            "prospectus", "objective statement", "strategy", "goal"
         ]
 
         # 1) explicit role / seniority words
         for k in exec_keys:
             if k in q:
-                return "Executive", 1
+                return "Executive", 2
         for k in spec_keys:
             if k in q:
-                return "Investment Analyst", 3
+                return "Investment Analyst", 4
         for k in mgr_keys:
             if k in q:
-                return "Manager", 2
+                return "portfolio manager", 3
 
         # 2) check DF_KNOWLEDGE for technical artifact mentions — bias to Investment Analyst
         try:
@@ -630,8 +630,8 @@ Provide both your thinking process and final analysis."""
                             if "data" in col.lower() or "element" in col.lower():
                                 return "Investment Analyst", 3
                             if "capability" in col.lower():
-                                return "Manager", 2
-                            return "Manager", 2
+                                return "portfolio manager", 2
+                            return "portfolio manager", 2
         except Exception:
             pass
 
@@ -639,15 +639,15 @@ Provide both your thinking process and final analysis."""
         intent = self._extract_intent(user_query).lower()
         logger.info("Using intents to find persona")
         if intent == "technical":
-            return "Investment Analyst", 3
+            return "Investment Analyst", 4
         if intent == "strategic":
-            return "Executive", 1
+            return "Executive", 2
         if intent == "operational":
-            return "Manager", 2
+            return "portfolio manager", 3
         
-        # 4) Ultimate fallback: return Manager as default
-        logger.info("No persona keywords found, defaulting to Manager")
-        return "Manager", 2
+        # 4) Ultimate fallback: return portfolio manager as default
+        logger.info("No persona keywords found, defaulting to portfolio manager")
+        return "portfolio manager", 2
 
     def _extract_all_anchors(self, user_query: str) -> List[str]:
         found: List[str] = []
@@ -718,13 +718,13 @@ Provide both your thinking process and final analysis."""
         if role:
             if "Investment Analyst" in role or "architect" in role:
                 persona = "Investment Analyst"
-                depth = 3
+                depth = 4
             elif "executive" in role:
                 persona = "Executive"
-                depth = 1
-            else:
-                persona = "Manager"
                 depth = 2
+            else:
+                persona = "portfolio manager"
+                depth = 3
         else:
             # Infer persona and depth from the query using DF_KNOWLEDGE and heuristics
             persona, depth = self._infer_persona(user_query)
@@ -742,7 +742,7 @@ Provide both your thinking process and final analysis."""
 
     def _generate_enterprise_query(self, plan: Dict[str, Any]) -> str:
         queries: List[str] = []
-        depth = plan.get("depth_scope") or 1
+        depth = plan.get("depth_scope") or 2
 
         for anchor in plan.get("primary_anchors", []):
             intent = plan.get("intent")
@@ -825,7 +825,7 @@ Provide both your thinking process and final analysis."""
                 ]
                 
                 if meta.empty:
-                    return f"- {node_name} (No additional metadata found)"
+                    return f"- {node_name}"
                 
                 row = meta.iloc[0]
                 
@@ -833,8 +833,8 @@ Provide both your thinking process and final analysis."""
                 if persona == "Executive":
                     # Executive: minimalist, name only
                     return f"- {node_name}"
-                elif persona == "Manager":
-                    # Manager: include process description
+                elif persona == "portfolio manager":
+                    # portfolio manager: include process description
                     desc = str(row.get('Process Description', 'N/A')) if 'Process Description' in row.index else 'N/A'
                     return f"- {node_name}: {desc}"
                 else:  # Investment Analyst
@@ -847,7 +847,7 @@ Provide both your thinking process and final analysis."""
                 return f"- {node_name}" if node_name else "- <unnamed node>"
         
         try:
-            persona = plan.get("persona_tone", "Manager") if isinstance(plan, dict) else "Manager"
+            persona = plan.get("persona_tone", "portfolio manager") if isinstance(plan, dict) else "portfolio manager"
             lines = []
             
             # Handle hierarchical vertical context (capabilities structure)
@@ -863,11 +863,11 @@ Provide both your thinking process and final analysis."""
                     else:
                         lines.append(f"- Capability: {cap_name} - {cap_desc}")
 
-                    # Manager and Investment Analyst see processes
+                    # portfolio manager and Investment Analyst see processes
                     for proc in cap.get("processes", [])[:5]:
                         proc_name = proc.get("name") or "<unnamed process>"
                         proc_desc = (proc.get("description") or "").strip()
-                        if persona == "Manager":
+                        if persona == "portfolio manager":
                             lines.append(f"  - Process: {proc_name} - {proc_desc}")
                         else:  # Investment Analyst
                             lines.append(f"  - Process: {proc_name} - {proc_desc}")
@@ -912,17 +912,17 @@ Provide both your thinking process and final analysis."""
                     if root_name:
                         lines.append(hydrate_node(root_name, "Executive"))
                 
-                elif persona == "Manager":
-                    # Manager: root + relationships with description
+                elif persona == "portfolio manager":
+                    # portfolio manager: root + relationships with description
                     if root_name:
-                        lines.append(hydrate_node(root_name, "Manager"))
+                        lines.append(hydrate_node(root_name, "portfolio manager"))
                     
                     # Add related nodes with hydration
                     for node in related_nodes[:10]:
                         if isinstance(node, dict):
                             node_name = node.get("name") or node.get("id", "")
                             if node_name:
-                                hydrated = hydrate_node(node_name, "Manager")
+                                hydrated = hydrate_node(node_name, "portfolio manager")
                                 lines.append(f"  {hydrated}")
                         elif isinstance(node, str):
                             lines.append(f"  - {node}")
@@ -1070,7 +1070,7 @@ You are an expert Enterprise Architecture Consultant for the Capital Markets Vir
  
 ### PERSONA GUIDELINES
 - EXECUTIVE: "Bottom Line Up Front." Focus on business value and high-level capabilities.
-- MANAGER: Focus on the "How." Detail process relationships, workflows, and dependencies.
+- portfolio manager: Focus on the "How." Detail process relationships, workflows, and dependencies.
 - Investment Analyst: Maximum fidelity. Include technical IDs, Data Element definitions, and exhaustive lineage mapping.
  
 ### STRUCTURE OF RESPONSE
