@@ -7,15 +7,26 @@
 }
 
 .app-header {
-  padding: 1rem 2rem;
-  background: linear-gradient(135deg, #E1E2E4 0%, #C8C9CB 100%);
+  padding: 1rem 1rem;
+  background: linear-gradient(135deg, #ffffff 100%, #f7f7f7 100%);
   border-bottom: 1px solid #C8C9CB;
+  font-family: arial;
+  color: #000000;
 }
 
-.app-header h1 {
+.app-header .title {
   margin: 0;
   font-size: 1.5rem;
-  color: #333333;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.app-header .tagline {
+  margin-top: 0.25rem;
+  font-size: 1rem;
+  font-weight: 100;
+  color: #555555;
+  font-style: italic;
 }
 
 .app-controls {

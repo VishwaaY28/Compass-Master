@@ -24,10 +24,10 @@ const DEFAULT_ZOOM = 1.0
 
 function App() {
   const nvlRef = useRef<NVL | null>(null)
-  const [entityType, setEntityType] = useState<EntityType>('capability')
+  const [entityType, setEntityType] = useState<EntityType>('Capability')
   const [entities, setEntities] = useState<EntityListItem[]>([])
   const [selectedEntityId, setSelectedEntityId] = useState<number | null>(null)
-  const [depth, setDepth] = useState(2)
+  const [depth, setDepth] = useState(1)
   const [direction, setDirection] = useState<Direction>('outgoing')
   const [allNodes, setAllNodes] = useState<TraversalNode[]>([])
   const [allRels, setAllRels] = useState<TraversalRelationship[]>([])
@@ -352,8 +352,8 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1 className="text-xl font-semibold">Visualizer</h1>
-      </header>
+  <h1 className="title">Visualizer</h1>
+</header>
 
       <div className="app-controls">
         <EntitySelector
