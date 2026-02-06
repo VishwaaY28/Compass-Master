@@ -87,11 +87,11 @@ def get_next_sno():
 def log_llm_call(
     vertical: str,
     user_query: str,
-    user_prompt:str,
-    llm_thinking_compass: str,
-    llm_response_compass: str,
-    llm_thinking_independent: str,
-    llm_response_independent: str,
+    user_prompt: str = "",
+    llm_thinking_compass: str = "",
+    llm_response_compass: str = "",
+    llm_thinking_independent: str = "",
+    llm_response_independent: str = "",
     system_prompt_compass: str = "",
     system_prompt_independent: str = "",
     request_id: str = None,
@@ -102,12 +102,14 @@ def log_llm_call(
     Args:
         vertical: The vertical/domain being queried
         user_query: The user's query
+        user_prompt: The user prompt with full context (default: empty string)
         llm_thinking_compass: The LLM's thinking process with compass context
         llm_response_compass: The LLM's final response with compass context
         llm_thinking_independent: The LLM's thinking process without compass context
         llm_response_independent: The LLM's final response without compass context
         system_prompt_compass: The system prompt used for compass LLM call (optional)
-    system_prompt_independent: The system prompt used for independent LLM call (optional)
+        system_prompt_independent: The system prompt used for independent LLM call (optional)
+        request_id: Optional request identifier for tracking (optional)
     """
     try:
         ensure_csv_exists()
@@ -117,10 +119,13 @@ def log_llm_call(
         time_str = now.strftime("%H:%M:%S")
         sno = get_next_sno()
         
-        # Combine request components for compass version
-        llm_request_compass = f"System Prompt: {system_prompt_compass}\n\nUser Prompt: {user_prompt}\n" if system_prompt_compass else f"User Prompt: {user_prompt}"
+        # Ensure user_prompt is set; fallback to user_query if empty
+        effective_user_prompt = user_prompt if user_prompt and user_prompt.strip() else user_query
         
-        # Combine request components for independent version
+        # Combine request components for compass version (with full context)
+        llm_request_compass = f"System Prompt: {system_prompt_compass}\n\n{effective_user_prompt}" if system_prompt_compass else effective_user_prompt
+        
+        # Combine request components for independent version (plain query without context)
         llm_request_independent = f"System Prompt: {system_prompt_independent}\n\nUser Query: {user_query}" if system_prompt_independent else f"User Query: {user_query}"
         
         row = [
@@ -128,6 +133,7 @@ def log_llm_call(
             date_str,
             time_str,
             vertical or "",
+            request_id or "",
             llm_request_compass or "",
             llm_thinking_compass or "",
             llm_response_compass or "",
@@ -136,7 +142,11 @@ def log_llm_call(
             llm_response_independent or ""
         ]
 
-    # Row matches header order: request_id then the rest; system_prompt is included in LLM request with compass
+        # Row matches header order: sno, date, time, vertical, request_id, llm_request_compass, llm_thinking_compass, llm_response_compass, llm_request_independent, llm_thinking_independent, llm_response_independent
+        
+        logger.debug(f"[LOG_LLM_CALL] Effective user_prompt length={len(effective_user_prompt)} (original length={len(user_prompt)})")
+        if not user_prompt or not user_prompt.strip():
+            logger.warning(f"[LOG_LLM_CALL] user_prompt was empty or None, using user_query as fallback for compass request")
         
         # If a request_id is provided, try to update an existing row instead of appending a duplicate
         if request_id:
@@ -159,6 +169,7 @@ def log_llm_call(
                             date_str,
                             time_str,
                             vertical or "",
+                            request_id or "",
                             llm_request_compass or "",
                             llm_thinking_compass or "",
                             llm_response_compass or "",
@@ -197,15 +208,15 @@ def log_llm_call(
             for i in range(len(rows) - 1, 0, -1):
                 r = rows[i]
                 # Ensure row has enough columns
-                if len(r) < 6:
+                if len(r) < 11:
                     continue
                 row_vertical = r[3] if len(r) > 3 else ""
                 llm_req_compass = r[5] if len(r) > 5 else ""
                 llm_resp_independent = r[10] if len(r) > 10 else ""
 
                 if row_vertical == (vertical or "") and (not llm_resp_independent or llm_resp_independent.strip() == ""):
-                    # match on embedded user query presence in the LLM request with compass (best-effort)
-                    if f"User Query: {user_query}" in llm_req_compass or (
+                    # match on embedded user prompt presence in the LLM request with compass (contains full context)
+                    if effective_user_prompt in llm_req_compass or (
                         llm_thinking_compass and len(llm_thinking_compass) > 0 and r[6] == llm_thinking_compass
                     ) or (llm_response_compass and len(llm_response_compass) > 0 and r[7] == llm_response_compass):
                         match_index = i
@@ -214,11 +225,13 @@ def log_llm_call(
             if match_index is not None:
                 r = rows[match_index]
                 sno_existing = r[0] if len(r) > 0 else ""
+                request_id_existing = r[4] if len(r) > 4 else ""
                 new_row = [
                     sno_existing,
                     date_str,
                     time_str,
                     vertical or "",
+                    request_id_existing or "",
                     llm_request_compass or "",
                     llm_thinking_compass or "",
                     llm_response_compass or "",

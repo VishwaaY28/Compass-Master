@@ -147,6 +147,28 @@ const CompassChat: React.FC = () => {
           .trim();
       };
 
+      // Helper function to parse bold text in pdfMake format
+      const parseBoldText = (text: string): any => {
+        const parts: any[] = [];
+        const regex = /\*\*(.*?)\*\*|([^\*]+)/g;
+        let match;
+        
+        while ((match = regex.exec(text)) !== null) {
+          if (match[1]) {
+            // Bold text
+            parts.push({
+              text: cleanText(match[1]),
+              bold: true,
+            });
+          } else if (match[2]) {
+            // Regular text
+            parts.push(cleanText(match[2]));
+          }
+        }
+        
+        return parts.length > 0 ? parts : cleanText(text);
+      };
+
       // Helper function to parse thinking text into formatted content
       const parseThinkingText = (text: string): any[] => {
         const content: any[] = [];
@@ -192,7 +214,7 @@ const CompassChat: React.FC = () => {
               isNumberedList = false;
               const bulletText = trimmedLine.replace(/^[-•*]\s+/, '');
               currentList.push({
-                text: cleanText(bulletText),
+                text: parseBoldText(bulletText),
                 fontSize: 11,
                 color: '#505050',
               });
@@ -211,7 +233,7 @@ const CompassChat: React.FC = () => {
               const match = trimmedLine.match(/^\d+[.)]\s+(.*)/);
               if (match) {
                 currentList.push({
-                  text: cleanText(match[1]),
+                  text: parseBoldText(match[1]),
                   fontSize: 11,
                   color: '#505050',
                 });
@@ -235,7 +257,7 @@ const CompassChat: React.FC = () => {
                 currentList = [];
               }
               content.push({
-                text: cleanText(trimmedLine),
+                text: parseBoldText(trimmedLine),
                 fontSize: 12,
                 bold: true,
                 color: '#333333',
@@ -260,7 +282,7 @@ const CompassChat: React.FC = () => {
                 currentList = [];
               }
               content.push({
-                text: cleanText(trimmedLine),
+                text: parseBoldText(trimmedLine),
                 fontSize: 11,
                 color: '#505050',
                 alignment: 'justify',
@@ -344,7 +366,7 @@ const CompassChat: React.FC = () => {
                 const headerText = match[2];
                 const fontSizes = { 1: 16, 2: 14, 3: 13, 4: 12, 5: 11, 6: 10 };
                 content.push({
-                  text: cleanText(headerText),
+                  text: parseBoldText(headerText),
                   fontSize: fontSizes[headerLevel] || 12,
                   bold: true,
                   color: '#1a1a1a',
@@ -365,7 +387,7 @@ const CompassChat: React.FC = () => {
               isNumberedList = false;
               const bulletText = trimmedLine.replace(/^[-•*]\s+/, '');
               currentList.push({
-                text: cleanText(bulletText),
+                text: parseBoldText(bulletText),
                 fontSize: 11,
                 color: '#505050',
               });
@@ -384,7 +406,7 @@ const CompassChat: React.FC = () => {
               const match = trimmedLine.match(/^\d+[.)]\s+(.*)/);
               if (match) {
                 currentList.push({
-                  text: cleanText(match[1]),
+                  text: parseBoldText(match[1]),
                   fontSize: 11,
                   color: '#505050',
                 });
@@ -408,22 +430,8 @@ const CompassChat: React.FC = () => {
                 currentList = [];
               }
               
-              const parts: any[] = [];
-              const regex = /\*\*(.*?)\*\*|([^\*]+)/g;
-              let match;
-              while ((match = regex.exec(trimmedLine)) !== null) {
-                if (match[1]) {
-                  parts.push({
-                    text: cleanText(match[1]),
-                    bold: true,
-                    color: '#1a1a1a',
-                  });
-                } else if (match[2]) {
-                  parts.push(cleanText(match[2]));
-                }
-              }
               content.push({
-                text: parts,
+                text: parseBoldText(trimmedLine),
                 fontSize: 11,
                 color: '#505050',
                 alignment: 'justify',
@@ -491,7 +499,7 @@ const CompassChat: React.FC = () => {
               }
               
               content.push({
-                text: cleanText(trimmedLine),
+                text: parseBoldText(trimmedLine),
                 fontSize: 11,
                 color: '#505050',
                 alignment: 'justify',
@@ -630,6 +638,7 @@ const CompassChat: React.FC = () => {
           const metaData = dualMsg.withDbResponse?.vmo_meta || vmoMeta;
           if (metaData) {
             content.push({
+              text: 'Intent Analysis',
               fontSize: 11,
               bold: true,
               color: '#0066cc',
@@ -861,26 +870,58 @@ const CompassChat: React.FC = () => {
                   {message.thinking.split('\n\n').map((paragraph, idx) => {
                     // Parse bullet points and numbered lists
                     const lines = paragraph.trim().split('\n');
+                    
+                    // Helper function to render text with bold formatting
+                    const renderTextWithBold = (text: string) => {
+                      const parts: any[] = [];
+                      const regex = /\*\*(.*?)\*\*|([^\*]+)/g;
+                      let match;
+                      let lastIndex = 0;
+                      
+                      while ((match = regex.exec(text)) !== null) {
+                        if (match[1]) {
+                          // Bold text
+                          parts.push(
+                            <strong key={`${idx}-${lastIndex}-bold`} className="font-bold text-gray-900">
+                              {match[1]}
+                            </strong>
+                          );
+                        } else if (match[2]) {
+                          // Regular text
+                          parts.push(
+                            <span key={`${idx}-${lastIndex}-text`} className="text-gray-700">
+                              {match[2]}
+                            </span>
+                          );
+                        }
+                        lastIndex++;
+                      }
+                      
+                      return parts.length > 0 ? parts : text;
+                    };
+                    
                     return (
                       <div key={idx} className="text-gray-700 leading-relaxed">
                         {lines.map((line, lineIdx) => {
                           const trimmedLine = line.trim();
                           // Handle bullet points
                           if (trimmedLine.match(/^[-•*]\s+/)) {
+                            const bulletText = trimmedLine.replace(/^[-•*]\s+/, '');
                             return (
                               <div key={lineIdx} className="flex gap-3 mb-2 text-base font-normal">
                                 <span className="text-blue-500 flex-shrink-0 mt-0.5">•</span>
-                                <span className="text-gray-700">{trimmedLine.replace(/^[-•*]\s+/, '')}</span>
+                                <span className="text-gray-700">{renderTextWithBold(bulletText)}</span>
                               </div>
                             );
                           }
                           // Handle numbered lists
                           if (trimmedLine.match(/^\d+[.)]\s+/)) {
                             const number = trimmedLine.match(/^\d+/)[0];
+                            const itemText = trimmedLine.replace(/^\d+[.)]\s+/, '');
                             return (
                               <div key={lineIdx} className="flex gap-3 mb-2 text-base font-normal">
                                 <span className="text-blue-600 flex-shrink-0 font-semibold">{number}.</span>
-                                <span className="text-gray-700">{trimmedLine.replace(/^\d+[.)]\s+/, '')}</span>
+                                <span className="text-gray-700">{renderTextWithBold(itemText)}</span>
                               </div>
                             );
                           }
@@ -888,7 +929,7 @@ const CompassChat: React.FC = () => {
                           if (trimmedLine.endsWith(':') || (trimmedLine.length > 0 && trimmedLine === trimmedLine.toUpperCase() && trimmedLine.length > 3)) {
                             return (
                               <div key={lineIdx} className="font-semibold text-gray-900 text-base mb-2 mt-2">
-                                {trimmedLine}
+                                {renderTextWithBold(trimmedLine)}
                               </div>
                             );
                           }
@@ -896,7 +937,7 @@ const CompassChat: React.FC = () => {
                           if (trimmedLine.length > 0) {
                             return (
                               <p key={lineIdx} className="text-gray-700 text-base leading-7 mb-2 font-normal">
-                                {trimmedLine}
+                                {renderTextWithBold(trimmedLine)}
                               </p>
                             );
                           }

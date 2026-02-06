@@ -31,6 +31,7 @@ from env import env
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
 from openai import AzureOpenAI
+from openai import OpenAI
 
 
 logger = logging.getLogger(__name__)
@@ -138,13 +139,13 @@ class AzureOpenAIThinkingClient:
                         kv_client = SecretClient(vault_url=key_vault_url, credential=credential)
                         
                         # Retrieve secrets from Key Vault
-                        api_key = kv_client.get_secret("llm-api-key").value
-                        endpoint = kv_client.get_secret("llm-base-endpoint").value
-                        deployment = kv_client.get_secret("llm-mini").value
+                        # api_key = kv_client.get_secret("llm-api-key").value
+                        # endpoint = kv_client.get_secret("llm-base-endpoint").value
+                        # deployment = kv_client.get_secret("llm-mini").value
                         api_version = kv_client.get_secret("llm-mini-version").value
-                        # api_key = kv_client.get_secret("kimi-preview-key").value
-                        # endpoint = kv_client.get_secret("kimi-preview-endpoint").value
-                        # deployment = "Kimi-K2-Thinking"
+                        api_key = kv_client.get_secret("kimi-preview-key").value
+                        endpoint = kv_client.get_secret("kimi-preview-endpoint").value
+                        deployment = "Kimi-K2-Thinking"
                         
                         # Strip whitespace from all values
                         api_key = api_key.strip() if api_key else None
@@ -190,23 +191,18 @@ class AzureOpenAIThinkingClient:
                     "Azure libraries are not installed. Install them with: pip install azure-identity azure-keyvault-secrets openai"
                 )
             config = self._load_config()
-            
+
             # Ensure endpoint doesn't have trailing slashes or path
             endpoint = config["endpoint"]
-            if endpoint.endswith("/"):
-                endpoint = endpoint.rstrip("/")
-            # Remove any /openai/v1 or /openai paths that might be included
-            if "/openai/deployments" in endpoint:
-                endpoint = endpoint.split("/openai/deployments")[0]
-            elif "/openai" in endpoint:
-                endpoint = endpoint.split("/openai")[0]
-            
-            logger.info(f"Cleaned endpoint: {endpoint}")
-            
-            self._client = AzureOpenAI(
+            base_url = endpoint.split("/chat/completions")[0]
+            # self._client = AzureOpenAI(
+            #     api_key=config["api_key"],
+            #     api_version=config["api_version"],
+            #     azure_endpoint=endpoint
+            # )
+            self._client = OpenAI(
                 api_key=config["api_key"],
-                api_version=config["api_version"],
-                azure_endpoint=endpoint
+                base_url=base_url,
             )
             logger.info(f"Azure OpenAI client initialized successfully with endpoint: {endpoint}")
 
@@ -582,23 +578,34 @@ Provide both your thinking process and final analysis."""
     def _infer_persona(self, user_query: str) -> Tuple[str, int]:
         """
         Infer persona and depth from the user query when user_profile.role is absent.
-        Returns (persona, depth_scope) where persona is one of Executive|Manager|Specialist
+        Returns (persona, depth_scope) where persona is one of Executive|Manager|Investment Analyst
         and depth_scope is 1,2,3 respectively.
         Uses explicit persona keywords, DF_KNOWLEDGE presence, and intent heuristics.
         """
         q = (user_query or "").lower()
 
         exec_keys = [
-            "executive", "ceo", "cfo", "director", "vp", "vision", "strategy",
-            "goal", "objective", "board", "stakeholder", "value", "kpi", "roi", "business value"
+            "executive", "ceo", "cfo", "director", "vp", "vision", "strategy", "goal",
+            "objective", "board", "stakeholder", "value", "kpi", "roi", "business value",
+            "investment committee", "fund strategy", "performance objectives",
+            "portfolio construction", "compliance", "regulatory", "risk appetite",
+            "governance", "mandate", "disclosure"
         ]
+
         mgr_keys = [
-            "manager", "supervisor", "team lead", "owner", "process", "workflow",
-            "steps", "how", "implement", "procedure", "slo", "sla", "deployment", "operational"
+            "manager", "supervisor", "team lead", "owner", "process", "workflow", "steps",
+            "how", "implement", "procedure", "operational", "policy", "deployment",
+            "performance targets", "tracking error", "information ratio", "investor profile",
+            "distribution policy", "fund accounting", "portfolio management",
+            "risk management", "compliance department", "client reporting"
         ]
+
         spec_keys = [
-            "specialist", "analyst", "engineer", "developer", "architect",
-            "api", "data entity", "data element", "attribute", "schema", "lineage", "id", "technical"
+            "analyst", "investment analyst", "engineer", "developer", "architect",
+            "api", "data entity", "data element", "attribute", "schema", "lineage",
+            "id", "technical", "aladdin", "blackrock", "performance measurement team",
+            "portfolio analytics", "fund valuation", "data element description",
+            "prospectus", "objective statement"
         ]
 
         # 1) explicit role / seniority words
@@ -607,12 +614,12 @@ Provide both your thinking process and final analysis."""
                 return "Executive", 1
         for k in spec_keys:
             if k in q:
-                return "Specialist", 3
+                return "Investment Analyst", 3
         for k in mgr_keys:
             if k in q:
                 return "Manager", 2
 
-        # 2) check DF_KNOWLEDGE for technical artifact mentions — bias to Specialist
+        # 2) check DF_KNOWLEDGE for technical artifact mentions — bias to Investment Analyst
         try:
             if self.df_knowledge is not None:
                 cols = [c for c in ("Data Element", "Data Entity", "Capability Name", "Process") if c in self.df_knowledge.columns]
@@ -621,7 +628,7 @@ Provide both your thinking process and final analysis."""
                     for name in names:
                         if name and name in q:
                             if "data" in col.lower() or "element" in col.lower():
-                                return "Specialist", 3
+                                return "Investment Analyst", 3
                             if "capability" in col.lower():
                                 return "Manager", 2
                             return "Manager", 2
@@ -632,7 +639,7 @@ Provide both your thinking process and final analysis."""
         intent = self._extract_intent(user_query).lower()
         logger.info("Using intents to find persona")
         if intent == "technical":
-            return "Specialist", 3
+            return "Investment Analyst", 3
         if intent == "strategic":
             return "Executive", 1
         if intent == "operational":
@@ -709,8 +716,8 @@ Provide both your thinking process and final analysis."""
         # Prefer explicit role from user_profile when provided; otherwise infer from the query text
         role = (user_profile.get("role", "") if user_profile else "").strip().lower()
         if role:
-            if "specialist" in role or "architect" in role:
-                persona = "Specialist"
+            if "Investment Analyst" in role or "architect" in role:
+                persona = "Investment Analyst"
                 depth = 3
             elif "executive" in role:
                 persona = "Executive"
@@ -830,8 +837,8 @@ Provide both your thinking process and final analysis."""
                     # Manager: include process description
                     desc = str(row.get('Process Description', 'N/A')) if 'Process Description' in row.index else 'N/A'
                     return f"- {node_name}: {desc}"
-                else:  # Specialist
-                    # Specialist: detailed with entity and element
+                else:  # Investment Analyst
+                    # Investment Analyst: detailed with entity and element
                     entity = str(row.get('Data Entity', 'N/A')) if 'Data Entity' in row.index else 'N/A'
                     element = str(row.get('Data Element', 'N/A')) if 'Data Element' in row.index else 'N/A'
                     return f"- {node_name} -> Entity: {entity} | Element: {element}"
@@ -856,13 +863,13 @@ Provide both your thinking process and final analysis."""
                     else:
                         lines.append(f"- Capability: {cap_name} - {cap_desc}")
 
-                    # Manager and Specialist see processes
+                    # Manager and Investment Analyst see processes
                     for proc in cap.get("processes", [])[:5]:
                         proc_name = proc.get("name") or "<unnamed process>"
                         proc_desc = (proc.get("description") or "").strip()
                         if persona == "Manager":
                             lines.append(f"  - Process: {proc_name} - {proc_desc}")
-                        else:  # Specialist
+                        else:  # Investment Analyst
                             lines.append(f"  - Process: {proc_name} - {proc_desc}")
                             for sub in proc.get("subprocesses", [])[:5]:
                                 sub_name = sub.get("name") or "<unnamed subprocess>"
@@ -929,10 +936,10 @@ Provide both your thinking process and final analysis."""
                             if from_node and to_node:
                                 lines.append(f"  [{from_node}] -{rel_type}-> [{to_node}]")
                 
-                else:  # Specialist
-                    # Specialist: comprehensive detail with all metadata
+                else:  # Investment Analyst
+                    # Investment Analyst: comprehensive detail with all metadata
                     if root_name:
-                        lines.append(hydrate_node(root_name, "Specialist"))
+                        lines.append(hydrate_node(root_name, "Investment Analyst"))
                     
                     # Show all related nodes with full hydration (data entities and elements)
                     if related_nodes:
@@ -941,7 +948,7 @@ Provide both your thinking process and final analysis."""
                             if isinstance(node, dict):
                                 node_name = node.get("name") or node.get("id", "")
                                 if node_name:
-                                    hydrated = hydrate_node(node_name, "Specialist")
+                                    hydrated = hydrate_node(node_name, "Investment Analyst")
                                     lines.append(f"    {hydrated}")
                             elif isinstance(node, str):
                                 lines.append(f"    - {node}")
@@ -1064,7 +1071,7 @@ You are an expert Enterprise Architecture Consultant for the Capital Markets Vir
 ### PERSONA GUIDELINES
 - EXECUTIVE: "Bottom Line Up Front." Focus on business value and high-level capabilities.
 - MANAGER: Focus on the "How." Detail process relationships, workflows, and dependencies.
-- SPECIALIST: Maximum fidelity. Include technical IDs, Data Element definitions, and exhaustive lineage mapping.
+- Investment Analyst: Maximum fidelity. Include technical IDs, Data Element definitions, and exhaustive lineage mapping.
  
 ### STRUCTURE OF RESPONSE
 1. TARGET ENTITY: [Target Entity: Name]
