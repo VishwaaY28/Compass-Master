@@ -57,7 +57,7 @@ def import_from_file():
 def import_from_csv():
     """Import capabilities from CSV file - parses flat CSV into nested structure"""
     try:
-        csv_path = "capabilities.csv"
+        csv_path = "Capability_Compass.csv"
         stats = import_csv_to_neo4j(csv_path)
         return {
             "status": "success",
