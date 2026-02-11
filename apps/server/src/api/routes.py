@@ -1804,6 +1804,8 @@ async def compass_chat_independent(payload: CompassChatRequest):
             "thinking": thinking,
             "result": result,
             "system_prompt_independent": system_prompt,
+            # Include VMO metadata if available from thinking client
+            "vmo_meta": azure_openai_thinking_client.get_last_vmo_meta() or {},
         }
 
     except HTTPException:
