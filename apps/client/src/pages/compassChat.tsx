@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FiSend, FiTrash2, FiChevronDown, FiLoader, FiDownload } from 'react-icons/fi';
+import { FiSend, FiTrash2, FiChevronDown, FiLoader, FiDownload, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import toast from 'react-hot-toast';
 import pdfMake from 'pdfmake/build/pdfmake';
@@ -28,6 +28,8 @@ interface Vertical {
 }
 
 
+type CardLayout = 'both' | 'left-only' | 'right-only';
+
 const CompassChat: React.FC = () => {
   const [query, setQuery] = useState('');
   const [selectedVertical, setSelectedVertical] = useState<string>('');
@@ -36,6 +38,7 @@ const CompassChat: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isLoadingVerticals, setIsLoadingVerticals] = useState(true);
   const [vmoMeta, setVmoMeta] = useState<any>(null);
+  const [cardLayout, setCardLayout] = useState<CardLayout>('both');
 
   const { dualMessages, isLoading, error, sendDualMessage, clearMessages } = useCompassChat();
   const { listVerticals } = useCapabilityApi();
@@ -129,7 +132,7 @@ const CompassChat: React.FC = () => {
   const exportToPDF = async () => {
     try {
       await initializePdfMake();
-      
+
       // Helper function to clean text
       const cleanText = (text: string): string => {
         if (!text) return '';
@@ -152,7 +155,7 @@ const CompassChat: React.FC = () => {
         const parts: any[] = [];
         const regex = /\*\*(.*?)\*\*|([^\*]+)/g;
         let match;
-        
+
         while ((match = regex.exec(text)) !== null) {
           if (match[1]) {
             // Bold text
@@ -165,7 +168,7 @@ const CompassChat: React.FC = () => {
             parts.push(cleanText(match[2]));
           }
         }
-        
+
         return parts.length > 0 ? parts : cleanText(text);
       };
 
@@ -173,15 +176,15 @@ const CompassChat: React.FC = () => {
       const parseThinkingText = (text: string): any[] => {
         const content: any[] = [];
         const paragraphs = text.split('\n\n');
-        
+
         paragraphs.forEach((para) => {
           const lines = para.trim().split('\n');
           let currentList: any[] = [];
           let isNumberedList = false;
-          
+
           lines.forEach((line) => {
             const trimmedLine = line.trim();
-            
+
             if (!trimmedLine) {
               // End current list if exists
               if (currentList.length > 0) {
@@ -200,7 +203,7 @@ const CompassChat: React.FC = () => {
               }
               return;
             }
-            
+
             // Handle bullet points
             if (trimmedLine.match(/^[-•*]\s+/)) {
               if (isNumberedList && currentList.length > 0) {
@@ -290,7 +293,7 @@ const CompassChat: React.FC = () => {
               });
             }
           });
-          
+
           // End list at end of paragraph
           if (currentList.length > 0) {
             if (isNumberedList) {
@@ -306,7 +309,7 @@ const CompassChat: React.FC = () => {
             }
           }
         });
-        
+
         return content;
       };
 
@@ -314,15 +317,15 @@ const CompassChat: React.FC = () => {
       const parseResponseText = (text: string): any[] => {
         const content: any[] = [];
         const paragraphs = text.split('\n\n');
-        
+
         paragraphs.forEach((para) => {
           const lines = para.trim().split('\n');
           let currentList: any[] = [];
           let isNumberedList = false;
-          
+
           lines.forEach((line) => {
             const trimmedLine = line.trim();
-            
+
             if (!trimmedLine) {
               // End current list if exists
               if (currentList.length > 0) {
@@ -341,7 +344,7 @@ const CompassChat: React.FC = () => {
               }
               return;
             }
-            
+
             // Handle markdown headers (## h2, ### h3, etc.)
             if (trimmedLine.match(/^#{1,6}\s+/)) {
               // End current list if exists
@@ -359,7 +362,7 @@ const CompassChat: React.FC = () => {
                 }
                 currentList = [];
               }
-              
+
               const match = trimmedLine.match(/^(#{1,6})\s+(.*)/);
               if (match) {
                 const headerLevel = match[1].length;
@@ -429,7 +432,7 @@ const CompassChat: React.FC = () => {
                 }
                 currentList = [];
               }
-              
+
               content.push({
                 text: parseBoldText(trimmedLine),
                 fontSize: 11,
@@ -455,7 +458,7 @@ const CompassChat: React.FC = () => {
                 }
                 currentList = [];
               }
-              
+
               const parts: any[] = [];
               const regex = /`(.*?)`|([^`]+)/g;
               let match;
@@ -497,7 +500,7 @@ const CompassChat: React.FC = () => {
                 }
                 currentList = [];
               }
-              
+
               content.push({
                 text: parseBoldText(trimmedLine),
                 fontSize: 11,
@@ -507,7 +510,7 @@ const CompassChat: React.FC = () => {
               });
             }
           });
-          
+
           // End list at end of paragraph
           if (currentList.length > 0) {
             if (isNumberedList) {
@@ -523,7 +526,7 @@ const CompassChat: React.FC = () => {
             }
           }
         });
-        
+
         return content;
       };
 
@@ -620,7 +623,7 @@ const CompassChat: React.FC = () => {
       dualMessages.forEach((dualMsg, msgIndex) => {
         // User Message
         const content = docDefinition.content;
-        
+
         content.push(
           { text: 'You:', style: 'userLabel' },
           { text: cleanText(dualMsg.userMessage.result), style: 'userText' }
@@ -725,7 +728,7 @@ const CompassChat: React.FC = () => {
               text: 'LLM Thinking Process:',
               style: 'dbThinkingLabel',
             });
-            
+
             // Parse and add formatted thinking content
             const thinkingContent = parseThinkingText(dualMsg.withDbResponse.thinking);
             content.push({
@@ -739,7 +742,7 @@ const CompassChat: React.FC = () => {
               text: 'LLM Response:',
               style: 'dbAnalysisLabel',
             });
-            
+
             // Parse and add formatted response content
             const responseContent = parseResponseText(dualMsg.withDbResponse.result);
             content.push({
@@ -761,7 +764,7 @@ const CompassChat: React.FC = () => {
               text: 'LLM Thinking Process:',
               style: 'dbThinkingLabel',
             });
-            
+
             // Parse and add formatted thinking content
             const thinkingContent = parseThinkingText(dualMsg.independentResponse.thinking);
             content.push({
@@ -775,7 +778,7 @@ const CompassChat: React.FC = () => {
               text: 'LLM Response:',
               style: 'dbAnalysisLabel',
             });
-            
+
             // Parse and add formatted response content
             const responseContent = parseResponseText(dualMsg.independentResponse.result);
             content.push({
@@ -852,8 +855,8 @@ const CompassChat: React.FC = () => {
               className="w-full px-5 py-4 flex items-center justify-between hover:bg-blue-100 transition-colors group"
             >
               <div className="flex items-center gap-3">
-                <span className={`text-blue-600 transition-transform ${isThinkingVisible ? 'rotate-180' : ''}`}>
-                  ▼
+                <span className={`text-blue-600 transition-transform ${isThinkingVisible ? 'rotate-90' : ''}`}>
+                  ➡️
                 </span>
                 <span className="text-base font-semibold text-gray-800 group-hover:text-blue-900">
                   LLM Thinking Process
@@ -870,14 +873,14 @@ const CompassChat: React.FC = () => {
                   {message.thinking.split('\n\n').map((paragraph, idx) => {
                     // Parse bullet points and numbered lists
                     const lines = paragraph.trim().split('\n');
-                    
+
                     // Helper function to render text with bold formatting
                     const renderTextWithBold = (text: string) => {
                       const parts: any[] = [];
                       const regex = /\*\*(.*?)\*\*|([^\*]+)/g;
                       let match;
                       let lastIndex = 0;
-                      
+
                       while ((match = regex.exec(text)) !== null) {
                         if (match[1]) {
                           // Bold text
@@ -896,10 +899,10 @@ const CompassChat: React.FC = () => {
                         }
                         lastIndex++;
                       }
-                      
+
                       return parts.length > 0 ? parts : text;
                     };
-                    
+
                     return (
                       <div key={idx} className="text-gray-700 leading-relaxed">
                         {lines.map((line, lineIdx) => {
@@ -963,11 +966,11 @@ const CompassChat: React.FC = () => {
               <div className="mb-5 p-4 bg-gradient-to-r from-gray-50 to-gray-25 rounded-lg border border-gray-200">
                 <div className="text-sm text-gray-700 space-y-2">
                   <div className="flex items-center gap-2">
-                    <span className="font-semibold text-gray-900">Persona:</span> 
+                    <span className="font-semibold text-gray-900">Persona:</span>
                     <span className="text-gray-700">{metaToShow.persona || '-'}</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="font-semibold text-gray-900">Intent:</span> 
+                    <span className="font-semibold text-gray-900">Intent:</span>
                     <span className="text-gray-700">{metaToShow.intent || '-'}</span>
                   </div>
                   <div className="flex items-start gap-2">
@@ -1041,10 +1044,10 @@ const CompassChat: React.FC = () => {
                     </blockquote>
                   ),
                   a: ({ href, children }) => (
-                    <a 
-                      href={href} 
-                      className="text-blue-600 hover:text-blue-700 underline transition-colors font-medium" 
-                      target="_blank" 
+                    <a
+                      href={href}
+                      className="text-blue-600 hover:text-blue-700 underline transition-colors font-medium"
+                      target="_blank"
                       rel="noopener noreferrer"
                     >
                       {children}
@@ -1168,41 +1171,91 @@ const CompassChat: React.FC = () => {
                 </div>
 
                 {/* Two Column Responses */}
-                <div className="grid grid-cols-2 gap-4 max-w-6xl">
-                  {/* Left Column - With Database Context */}
-                  <div className="flex flex-col">
-                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-                      <div className="mb-4 pb-4 border-b border-gray-200">
-                        <div className="flex items-center gap-2">
-                          <img src="/favicon.png" alt="Compass" className="w-6 h-6" />
-                          <h3 className="text-sm font-semibold text-gray-900">
-                            Using Capability Compass
-                          </h3>
+                <div className="max-w-6xl">
+                  <div 
+                    className={`grid gap-4 transition-all duration-300 ease-in-out ${
+                      cardLayout === 'both' 
+                        ? 'grid-cols-2' 
+                        : 'grid-cols-1'
+                    }`}
+                  >
+                    {/* Left Column - With Database Context */}
+                    {(cardLayout === 'both' || cardLayout === 'left-only') && (
+                      <div className="flex flex-col">
+                        <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                          {/* Card Header with Toggle */}
+                          <div className="flex items-center justify-between mb-4 pb-4 border-b border-gray-200">
+                            <div className="flex items-center gap-2">
+                              <img src="/favicon.png" alt="Compass" className="w-6 h-6" />
+                              <h3 className="text-sm font-semibold text-gray-900">
+                                Using Capability Compass
+                              </h3>
+                            </div>
+                            {cardLayout !== 'left-only' && (
+                              <button
+                                onClick={() => setCardLayout('left-only')}
+                                className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors duration-200"
+                                title="Expand this card"
+                              >
+                                <FiChevronRight size={18} className="text-gray-500 hover:text-gray-700" />
+                              </button>
+                            )}
+                            {cardLayout === 'left-only' && (
+                              <button
+                                onClick={() => setCardLayout('both')}
+                                className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors duration-200"
+                                title="Expand this card"
+                              >
+                                <FiChevronLeft size={18} className="text-gray-500 hover:text-gray-700" />
+                              </button>
+                            )}
+                          </div>
+
+                          {renderMessage(
+                            dualMsg.withDbResponse,
+                            dualMsg.id,
+                            'db'
+                          )}
                         </div>
                       </div>
+                    )}
 
-                      {renderMessage(
-                        dualMsg.withDbResponse,
-                        dualMsg.id,
-                        'db'
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Right Column - Independent Thinking */}
-                  <div className="flex flex-col">
-                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-                      <div className="mb-4 pb-4 border-b border-gray-200">
-                        <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                          Without Capability Compass
-                        </h3>
+                    {/* Right Column - Independent Thinking */}
+                    {(cardLayout === 'both' || cardLayout === 'right-only') && (
+                      <div className="flex flex-col">
+                        <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                          {/* Card Header with Toggle */}
+                          <div className="flex items-center justify-between mb-4 pb-4 border-b border-gray-200">
+                            <h3 className="text-sm font-semibold text-gray-900">
+                              Without Capability Compass
+                            </h3>
+                            {cardLayout !== 'right-only' && (
+                              <button
+                                onClick={() => setCardLayout('right-only')}
+                                className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors duration-200"
+                                title="Expand this card"
+                              >
+                                <FiChevronLeft size={18} className="text-gray-500 hover:text-gray-700" />
+                              </button>
+                            )}
+                            {cardLayout === 'right-only' && (
+                              <button
+                                onClick={() => setCardLayout('both')}
+                                className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors duration-200"
+                                title="Expand this card"
+                              >
+                                <FiChevronRight size={18} className="text-gray-500 hover:text-gray-700" />
+                              </button>
+                            )}
+                          </div>
+                          {renderMessage(
+                            dualMsg.independentResponse,
+                            dualMsg.id,
+                            'independent'
+                          )}
+                        </div>
                       </div>
-                      {renderMessage(
-                        dualMsg.independentResponse,
-                        dualMsg.id,
-                        'independent'
-                      )}
-                    </div>
+                    )}
                   </div>
                 </div>
               </div>
