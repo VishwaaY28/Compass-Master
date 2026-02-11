@@ -37,7 +37,6 @@ const CompassChat: React.FC = () => {
   const [showThinking, setShowThinking] = useState<{ [key: string]: boolean }>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isLoadingVerticals, setIsLoadingVerticals] = useState(true);
-  const [vmoMeta, setVmoMeta] = useState<any>(null);
   const [cardLayout, setCardLayout] = useState<CardLayout>('both');
 
   const { dualMessages, isLoading, error, sendDualMessage, clearMessages } = useCompassChat();
@@ -75,34 +74,6 @@ const CompassChat: React.FC = () => {
       toast.error(error);
     }
   }, [error]);
-
-  // Poll VMO metadata (persona/tone/intent/primary anchors) for display
-  useEffect(() => {
-    let mounted = true;
-    const fetchMeta = async () => {
-      try {
-        const res = await fetch('/api/vmo/meta');
-        if (!res.ok) {
-          logger.debug(`VMO metadata fetch returned ${res.status}`);
-          return;
-        }
-        const data = await res.json();
-        if (mounted) setVmoMeta(data);
-      } catch (err) {
-        // ignore network errors silently; metadata is optional
-        if (mounted) {
-          logger.debug('Failed to fetch VMO metadata:', err);
-        }
-      }
-    };
-
-    fetchMeta();
-    const iv = setInterval(fetchMeta, 3000);
-    return () => {
-      mounted = false;
-      clearInterval(iv);
-    };
-  }, []);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -637,8 +608,8 @@ const CompassChat: React.FC = () => {
         }
 
         // VMO Metadata Section (if available)
-        if (dualMsg.withDbResponse?.vmo_meta || vmoMeta) {
-          const metaData = dualMsg.withDbResponse?.vmo_meta || vmoMeta;
+        if (dualMsg.withDbResponse?.vmo_meta) {
+          const metaData = dualMsg.withDbResponse.vmo_meta;
           if (metaData) {
             content.push({
               text: 'Intent Analysis',
@@ -842,8 +813,8 @@ const CompassChat: React.FC = () => {
 
     const thinkingKey = `${messageId}-${side}`;
     const isThinkingVisible = showThinking[thinkingKey] || false;
-  // Prefer message-scoped VMO metadata (attached when response arrives). Fall back to global polled VMO meta.
-  const metaToShow = side === 'db' ? (message.vmo_meta || vmoMeta) : null;
+  // Use message-scoped VMO metadata (attached when response arrives)
+  const metaToShow = side === 'db' ? message.vmo_meta : null;
 
     return (
       <div className="space-y-2">
