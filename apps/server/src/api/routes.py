@@ -288,9 +288,8 @@ async def research_capabilities(payload: ResearchRequest):
                     except Exception:
                         data_entities = []
                     
-                    # Build two structures: data_entities (for display) and flat data_elements (for frontend)
+                    # Build nested data_entities with data_elements inside them
                     entities_list = []
-                    flat_elements = []
                     
                     for de in data_entities:
                         try:
@@ -299,17 +298,18 @@ async def research_capabilities(payload: ResearchRequest):
                             data_elements = []
                         
                         entities_list.append({
+                            "data_entity_id": de.id,
                             "data_entity_name": de.name,
                             "data_entity_description": de.description,
+                            "data_elements": [
+                                {
+                                    "id": elem.id,
+                                    "name": elem.name,
+                                    "description": elem.description,
+                                }
+                                for elem in data_elements
+                            ]
                         })
-                        
-                        for elem in data_elements:
-                            flat_elements.append({
-                                "id": elem.id,
-                                "name": elem.name,
-                                "entityName": de.name,
-                                "description": elem.description,
-                            })
                     
                     result.append({
                         "id": subprocess.id,
@@ -321,7 +321,6 @@ async def research_capabilities(payload: ResearchRequest):
                         "application": getattr(subprocess, "application", None),
                         "api": getattr(subprocess, "api", None),
                         "data_entities": entities_list,
-                        "data_elements": flat_elements,
                         "parent_process": {
                             "id": process.id,
                             "name": process.name,
@@ -366,9 +365,8 @@ async def research_capabilities(payload: ResearchRequest):
                         except Exception:
                             data_entities = []
                         
-                        # Build two structures: data_entities (for display) and flat data_elements (for frontend)
+                        # Build nested data_entities with data_elements inside them
                         entities_list = []
-                        flat_elements = []
                         
                         for de in data_entities:
                             try:
@@ -377,17 +375,18 @@ async def research_capabilities(payload: ResearchRequest):
                                 data_elements = []
                             
                             entities_list.append({
+                                "data_entity_id": de.id,
                                 "data_entity_name": de.name,
                                 "data_entity_description": de.description,
+                                "data_elements": [
+                                    {
+                                        "id": elem.id,
+                                        "name": elem.name,
+                                        "description": elem.description,
+                                    }
+                                    for elem in data_elements
+                                ]
                             })
-                            
-                            for elem in data_elements:
-                                flat_elements.append({
-                                    "id": elem.id,
-                                    "name": elem.name,
-                                    "entityName": de.name,
-                                    "description": elem.description,
-                                })
                         
                         subprocess_list.append({
                             "id": sp.id,
@@ -398,7 +397,6 @@ async def research_capabilities(payload: ResearchRequest):
                             "application": getattr(sp, "application", None),
                             "api": getattr(sp, "api", None),
                             "data_entities": entities_list,
-                            "data_elements": flat_elements,
                         })
 
                     result.append({
@@ -480,9 +478,8 @@ async def research_capabilities(payload: ResearchRequest):
                         except Exception:
                             data_entities = []
                         
-                        # Build two structures: data_entities (for display) and flat data_elements (for frontend)
+                        # Build nested data_entities with data_elements inside them
                         entities_list = []
-                        flat_elements = []
                         
                         for de in data_entities:
                             try:
@@ -491,17 +488,18 @@ async def research_capabilities(payload: ResearchRequest):
                                 data_elements = []
                             
                             entities_list.append({
+                                "data_entity_id": de.id,
                                 "data_entity_name": de.name,
                                 "data_entity_description": de.description,
+                                "data_elements": [
+                                    {
+                                        "id": elem.id,
+                                        "name": elem.name,
+                                        "description": elem.description,
+                                    }
+                                    for elem in data_elements
+                                ]
                             })
-                            
-                            for elem in data_elements:
-                                flat_elements.append({
-                                    "id": elem.id,
-                                    "name": elem.name,
-                                    "entityName": de.name,
-                                    "description": elem.description,
-                                })
                         
                         subprocess_list.append({
                             "id": sp.id,
@@ -512,7 +510,6 @@ async def research_capabilities(payload: ResearchRequest):
                             "application": getattr(sp, "application", None),
                             "api": getattr(sp, "api", None),
                             "data_entities": entities_list,
-                            "data_elements": flat_elements,
                         })
 
                     proc_list.append({
@@ -797,12 +794,116 @@ async def list_subverticals(vertical_id: Optional[int] = Query(None, alias="vert
     return [await SubVertical_Pydantic.from_tortoise_orm(sv) for sv in subverticals]
 
 
-@router.get("/subverticals/{subvertical_id}", response_model=SubVertical_Pydantic)
+@router.get("/subverticals/{subvertical_id}")
 async def get_subvertical(subvertical_id: int):
+    """
+    Get a specific sub-vertical with complete hierarchical data including:
+    - Capabilities
+    - Processes (with levels)
+    - SubProcesses
+    - Data Entities
+    - Data Elements
+    - Applications and APIs
+    """
     obj = await vertical_repository.fetch_subvertical_by_id(subvertical_id)
     if not obj:
         raise HTTPException(status_code=404, detail="SubVertical not found")
-    return await SubVertical_Pydantic.from_tortoise_orm(obj)
+    
+    # Fetch vertical name for context
+    vertical_name = None
+    try:
+        vertical = await obj.vertical
+        if vertical:
+            vertical_name = vertical.name
+    except Exception:
+        vertical_name = None
+    
+    # Fetch all capabilities for this sub-vertical
+    try:
+        capabilities = await obj.capabilities.all()
+    except Exception:
+        capabilities = []
+    
+    # Build complete capability hierarchy
+    capabilities_list = []
+    for capability in capabilities:
+        try:
+            processes = await capability.processes.all()
+        except Exception:
+            processes = []
+        
+        processes_list = []
+        for process in processes:
+            try:
+                subprocesses = await process.subprocesses.all()
+            except Exception:
+                subprocesses = []
+            
+            subprocesses_list = []
+            for subprocess in subprocesses:
+                try:
+                    data_entities = await subprocess.data_entities.all()
+                except Exception:
+                    data_entities = []
+                
+                # Fetch data elements for each data entity
+                entities_with_elements = []
+                for data_entity in data_entities:
+                    try:
+                        data_elements = await data_entity.data_elements.all()
+                    except Exception:
+                        data_elements = []
+                    
+                    entities_with_elements.append({
+                        "data_entity_id": data_entity.id,
+                        "data_entity_name": data_entity.name,
+                        "data_entity_description": data_entity.description,
+                        "data_elements": [
+                            {
+                                "data_element_id": elem.id,
+                                "data_element_name": elem.name,
+                                "data_element_description": elem.description,
+                            }
+                            for elem in data_elements
+                        ]
+                    })
+                
+                subprocesses_list.append({
+                    "id": subprocess.id,
+                    "name": subprocess.name,
+                    "description": subprocess.description,
+                    "category": subprocess.category,
+                    "application": getattr(subprocess, "application", None),
+                    "api": getattr(subprocess, "api", None),
+                    "data_entities": entities_with_elements,
+                })
+            
+            process_level = getattr(process.level, 'value', process.level)
+            processes_list.append({
+                "id": process.id,
+                "name": process.name,
+                "level": process_level,
+                "description": process.description,
+                "category": process.category,
+                "subprocesses": subprocesses_list,
+            })
+        
+        capabilities_list.append({
+            "id": capability.id,
+            "name": capability.name,
+            "description": capability.description,
+            "org_units": getattr(capability, "org_units", None),
+            "processes": processes_list,
+        })
+    
+    result = {
+        "id": obj.id,
+        "name": obj.name,
+        "vertical": vertical_name,
+        "capabilities": capabilities_list,
+    }
+    
+    return JSONResponse(result)
 
 
 @router.put("/subverticals/{subvertical_id}", response_model=SubVertical_Pydantic)
