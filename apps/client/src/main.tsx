@@ -8,6 +8,7 @@ import CompassMaster from './pages/compassMaster';
 import CompassView from './pages/compassView';
 import CompassVisualizer from './pages/compassVisualizer';
 import CompassChat from './pages/compassChat';
+import CompassIngestion from './pages/compassIngestion';
 import Error from './pages/Error';
 import ResearchAgent from './pages/researchAgent';
 
@@ -30,6 +31,11 @@ const router = createBrowserRouter([
       {
         path: 'capabilities',
         element: <CompassMaster />,
+        errorElement: <Error />,
+      },
+      {
+        path: 'compass-ingestion',
+        element: <CompassIngestion />,
         errorElement: <Error />,
       },
       {
