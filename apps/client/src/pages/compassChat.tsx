@@ -1157,7 +1157,7 @@ const CompassChat: React.FC = () => {
                           {/* Card Header with Toggle */}
                           <div className="flex items-center justify-between mb-4 pb-4 border-b border-gray-200">
                             <div className="flex items-center gap-2">
-                              <img src="/favicon.png" alt="Compass" className="w-6 h-6" />
+                              <img src="/favicon.png" alt="Compass" className="w-10 h-10" />
                               <h3 className="text-sm font-semibold text-gray-900">
                                 Using Capability Compass
                               </h3>
@@ -1197,9 +1197,12 @@ const CompassChat: React.FC = () => {
                         <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
                           {/* Card Header with Toggle */}
                           <div className="flex items-center justify-between mb-4 pb-4 border-b border-gray-200">
-                            <h3 className="text-sm font-semibold text-gray-900">
-                              Without Capability Compass
-                            </h3>
+                           <div className="flex items-center gap-2">
+                              <img src="/llm.png" alt="llm" className="w-10 h-10" />
+                              <h3 className="text-sm font-semibold text-gray-900">
+                                Without Capability Compass
+                              </h3>
+                            </div>
                             {cardLayout !== 'right-only' && (
                               <button
                                 onClick={() => setCardLayout('right-only')}
