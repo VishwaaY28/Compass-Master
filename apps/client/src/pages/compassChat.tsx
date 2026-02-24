@@ -75,6 +75,35 @@ const CompassChat: React.FC = () => {
     }
   }, [error]);
 
+  // DEBUG: Log independent responses to help identify missing results
+  useEffect(() => {
+    dualMessages.forEach((msg) => {
+      if (msg.independentResponse) {
+        const hasThinking = !!(msg.independentResponse.thinking && msg.independentResponse.thinking.trim());
+        const hasResult = !!(msg.independentResponse.result && msg.independentResponse.result.trim());
+        
+        console.log('[Debug] Independent Response Details:', {
+          timestamp: new Date().toISOString(),
+          hasThinking,
+          hasResult,
+          thinkingLength: msg.independentResponse.thinking?.length || 0,
+          resultLength: msg.independentResponse.result?.length || 0,
+          thinkingPreview: msg.independentResponse.thinking?.substring(0, 100),
+          resultPreview: msg.independentResponse.result?.substring(0, 100),
+          fullResponse: msg.independentResponse,
+        });
+        
+        // Warn if result is missing
+        if (!hasResult) {
+          console.warn('[Warning] Independent response has no result!', {
+            query: msg.userQuery,
+            thinking: msg.independentResponse.thinking?.substring(0, 200),
+          });
+        }
+      }
+    });
+  }, [dualMessages]);
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
 

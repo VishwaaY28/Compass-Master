@@ -22,6 +22,11 @@ def parse_csv_to_nested_json(csv_path: str) -> List[Dict[str, Any]]:
         'data_element': {}
     }
 
+    # Track subprocess and data entity/element uniqueness per capability
+    subprocess_per_capability = {}  # {capability_name: {process_name: {subprocess_name}}}
+    data_entity_per_subprocess = {}  # {capability_name: {process_name: {subprocess_name: {entity_name}}}}
+    data_element_per_entity = {}  # {capability_name: {process_name: {subprocess_name: {entity_name: {element_name}}}}}
+
     def get_uid(entity_type: str, name: str) -> int:
         if name in uid_maps[entity_type]:
             return uid_maps[entity_type][name]
@@ -48,6 +53,12 @@ def parse_csv_to_nested_json(csv_path: str) -> List[Dict[str, Any]]:
             if not cap_name:
                 continue
 
+            # Initialize capability tracking dicts if not exists
+            if cap_name not in subprocess_per_capability:
+                subprocess_per_capability[cap_name] = {}
+                data_entity_per_subprocess[cap_name] = {}
+                data_element_per_entity[cap_name] = {}
+
             if cap_name not in capabilities:
                 capabilities[cap_name] = {
                     'id': get_uid('capability', cap_name),
@@ -69,36 +80,59 @@ def parse_csv_to_nested_json(csv_path: str) -> List[Dict[str, Any]]:
                     'category': 'Back Office',
                     'subprocesses': OrderedDict()
                 }
+                # Initialize subprocess tracking for this process in this capability
+                subprocess_per_capability[cap_name][proc_name] = set()
+                data_entity_per_subprocess[cap_name][proc_name] = {}
 
+            # Only add subprocess if it hasn't been added to this specific capability+process combination
             if proc_name and subproc_name:
                 proc = cap['processes'][proc_name]
-                if subproc_name not in proc['subprocesses']:
-                    proc['subprocesses'][subproc_name] = {
-                        'id': get_uid('subprocess', subproc_name),
-                        'name': subproc_name,
-                        'description': subproc_desc,
-                        'category': 'Back Office',
-                        'data_entities': OrderedDict()
-                    }
-
-                if entity_name:
-                    subproc = proc['subprocesses'][subproc_name]
-                    if entity_name not in subproc['data_entities']:
-                        subproc['data_entities'][entity_name] = {
-                            'data_entity_id': get_uid('data_entity', entity_name),
-                            'data_entity_name': entity_name,
-                            'data_entity_description': entity_desc,
-                            'data_elements': OrderedDict()
+                # Check if this subprocess is already in this capability's process
+                if subproc_name not in subprocess_per_capability[cap_name][proc_name]:
+                    if subproc_name not in proc['subprocesses']:
+                        proc['subprocesses'][subproc_name] = {
+                            'id': get_uid('subprocess', subproc_name),
+                            'name': subproc_name,
+                            'description': subproc_desc,
+                            'category': 'Back Office',
+                            'data_entities': OrderedDict()
                         }
+                        # Track this subprocess as added for this capability+process
+                        subprocess_per_capability[cap_name][proc_name].add(subproc_name)
+                        data_entity_per_subprocess[cap_name][proc_name][subproc_name] = set()
+                        data_element_per_entity[cap_name][proc_name + '_' + subproc_name] = {}
 
-                    if element_name:
-                        entity = subproc['data_entities'][entity_name]
-                        if element_name not in entity['data_elements']:
-                            entity['data_elements'][element_name] = {
-                                'data_element_id': get_uid('data_element', element_name),
-                                'data_element_name': element_name,
-                                'data_element_description': element_desc
+                # Only add data entity if subprocess exists in this capability
+                if entity_name and subproc_name in proc['subprocesses']:
+                    subproc = proc['subprocesses'][subproc_name]
+                    if entity_name not in data_entity_per_subprocess[cap_name][proc_name].get(subproc_name, set()):
+                        if entity_name not in subproc['data_entities']:
+                            subproc['data_entities'][entity_name] = {
+                                'data_entity_id': get_uid('data_entity', entity_name),
+                                'data_entity_name': entity_name,
+                                'data_entity_description': entity_desc,
+                                'data_elements': OrderedDict()
                             }
+                            if subproc_name not in data_entity_per_subprocess[cap_name][proc_name]:
+                                data_entity_per_subprocess[cap_name][proc_name][subproc_name] = set()
+                            data_entity_per_subprocess[cap_name][proc_name][subproc_name].add(entity_name)
+                            key = cap_name + '_' + proc_name + '_' + subproc_name + '_' + entity_name
+                            data_element_per_entity[cap_name][key] = set()
+
+                    # Only add data element if entity exists in this capability's subprocess
+                    if element_name and entity_name in subproc['data_entities']:
+                        entity = subproc['data_entities'][entity_name]
+                        key = cap_name + '_' + proc_name + '_' + subproc_name + '_' + entity_name
+                        if element_name not in data_element_per_entity[cap_name].get(key, set()):
+                            if element_name not in entity['data_elements']:
+                                entity['data_elements'][element_name] = {
+                                    'data_element_id': get_uid('data_element', element_name),
+                                    'data_element_name': element_name,
+                                    'data_element_description': element_desc
+                                }
+                                if key not in data_element_per_entity[cap_name]:
+                                    data_element_per_entity[cap_name][key] = set()
+                                data_element_per_entity[cap_name][key].add(element_name)
 
     result = []
     for cap in capabilities.values():

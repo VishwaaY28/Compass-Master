@@ -317,18 +317,35 @@ Use your domain expertise and external knowledge."""
         result = ""
 
         try:
+            logger.debug(f"[Independent] Raw response length: {len(response_text)}, first 200 chars: {response_text[:200]}")
+            
             if "<thinking>" in response_text and "</thinking>" in response_text:
-                parts = response_text.split("<thinking>")
-                thinking = parts[1].split("</thinking>")[0].strip()
-                result = parts[1].split("</thinking>")[1].strip()
+                try:
+                    thinking_start = response_text.index("<thinking>") + len("<thinking>")
+                    thinking_end = response_text.index("</thinking>")
+                    thinking = response_text[thinking_start:thinking_end].strip()
+                    
+                    # Result is everything after </thinking>
+                    result = response_text[thinking_end + len("</thinking>"):].strip()
+                    
+                    logger.debug(f"[Independent] Successfully parsed - thinking length: {len(thinking)}, result length: {len(result)}")
+                    
+                    # Validate result is not empty
+                    if not result:
+                        logger.warning(f"[Independent] Result is empty after parsing thinking tags. Response text: {response_text[:500]}")
+                        
+                except (ValueError, IndexError) as parse_err:
+                    logger.error(f"[Independent] Failed to parse thinking tags: {parse_err}, response: {response_text[:300]}")
+                    result = response_text.strip()
+                    thinking = "Analysis in progress..."
             else:
-                # If no explicit thinking tags, treat all as result
+                logger.warning(f"[Independent] No thinking tags found in response. Response: {response_text[:300]}")
                 result = response_text.strip()
-                thinking = "Analysis in progress..."
+                thinking = "Analysis completed without explicit thinking process"
 
         except Exception as e:
-            logger.warning(f"Error parsing response: {e}")
-            result = response_text
+            logger.error(f"[Independent] Error parsing response: {e}", exc_info=True)
+            result = response_text.strip() if response_text else ""
             thinking = "Analysis completed"
 
         return thinking, result

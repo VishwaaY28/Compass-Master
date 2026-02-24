@@ -26,3 +26,33 @@ class CapabilityService:
     def get_all_capabilities():
         capability = Capability.nodes.all()
         return [{"uid": p.uid, "name": p.name} for p in capability]
+
+    @staticmethod
+    def delete_by_id(capability_id: int):
+        """
+        Delete a capability by its ID along with all related nodes and relationships.
+        """
+        try:
+            capability = Capability.nodes.get(uid=capability_id)
+            # Delete the capability node and all its relationships (cascade delete)
+            capability.delete()
+            return True
+        except Capability.DoesNotExist:
+            return False
+        except Exception as e:
+            raise Exception(f"Error deleting capability: {str(e)}")
+
+    @staticmethod
+    def delete_by_name(capability_name: str):
+        """
+        Delete a capability by its name along with all related nodes and relationships.
+        """
+        try:
+            capability = Capability.nodes.get(name=capability_name)
+            # Delete the capability node and all its relationships (cascade delete)
+            capability.delete()
+            return True
+        except Capability.DoesNotExist:
+            return False
+        except Exception as e:
+            raise Exception(f"Error deleting capability: {str(e)}")
