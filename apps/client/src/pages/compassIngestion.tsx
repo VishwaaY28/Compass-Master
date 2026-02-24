@@ -6,7 +6,6 @@ import {
   FiCheckCircle,
   FiAlertCircle,
   FiLoader,
-  FiChevronDown,
 } from 'react-icons/fi';
 import toast, { Toaster } from 'react-hot-toast';
 
@@ -64,12 +63,16 @@ const CompassIngestion: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   // removed expanded collapse UI in favor of modal popup
-  const [importingFileId, setImportingFileId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState<boolean>(false);
   const [modalData, setModalData] = useState<ExtractedCapabilityModel | null>(null);
   const [modalFileId, setModalFileId] = useState<string | null>(null);
   const [isThinking, setIsThinking] = useState<boolean>(false);
   const [thinkingMessage, setThinkingMessage] = useState<string>("");
+  
+  // Manual input fields
+  const [manualVertical, setManualVertical] = useState<string>("");
+  const [manualSubVertical, setManualSubVertical] = useState<string>("");
+  const [extractionDepth, setExtractionDepth] = useState<string>("subprocess"); // capability, process, subprocess, data_entity, data_element
 
   const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
@@ -158,9 +161,19 @@ const CompassIngestion: React.FC = () => {
     if (!actualFile) return;
     
     formData.append('file', actualFile);
+    
+    // Build URL with query parameters
+    const params = new URLSearchParams();
+    if (manualVertical.trim()) params.append('vertical', manualVertical.trim());
+    if (manualSubVertical.trim()) params.append('subvertical', manualSubVertical.trim());
+    params.append('extraction_depth', extractionDepth);
+    
+    const url = `/api/upload/pdf${params.toString() ? `?${params.toString()}` : ''}`;
+    
+    console.log('Upload request:', { vertical: manualVertical, subvertical: manualSubVertical, depth: extractionDepth, url });
 
     try {
-      const response = await fetch('/api/upload/pdf', {
+      const response = await fetch(url, {
         method: 'POST',
         body: formData,
       });
@@ -314,7 +327,6 @@ const CompassIngestion: React.FC = () => {
       return;
     }
 
-    setImportingFileId(fileId);
     try {
       const response = await fetch('/api/upload/import-to-graph', {
         method: 'POST',
@@ -346,8 +358,6 @@ const CompassIngestion: React.FC = () => {
         error instanceof Error ? error.message : 'Import failed';
       toast.error(errorMsg);
       console.error('Import error:', error);
-    } finally {
-      setImportingFileId(null);
     }
   };
 
@@ -379,38 +389,157 @@ const CompassIngestion: React.FC = () => {
         </div>
       </header>
 
-      <div className="mx-auto mt-6 grid lg:grid-cols-3 gap-6 px-6 max-w-7xl">
-        <div className="lg:col-span-2">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
+      <div className="mx-auto mt-6 grid lg:grid-cols-4 gap-6 px-6 max-w-7xl">
+        {/* Sidebar: Configuration and File Management */}
+        <div className="lg:col-span-1 space-y-4">
+          {/* Manual Configuration Card */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+            {/* Vertical Input */}
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                Vertical <span className="text-xs text-gray-500">(Optional)</span>
+              </label>
+              <input
+                type="text"
+                value={manualVertical}
+                onChange={(e) => setManualVertical(e.target.value)}
+                placeholder="e.g., Capital Markets"
+                className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+
+            {/* SubVertical Input */}
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                SubVertical <span className="text-xs text-gray-500">(Optional)</span>
+              </label>
+              <input
+                type="text"
+                value={manualSubVertical}
+                onChange={(e) => setManualSubVertical(e.target.value)}
+                placeholder="e.g., Asset Management"
+                className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+
+            {/* Extraction Depth Dropdown */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                Extraction Depth <span className="text-xs text-gray-500">(Required)</span>
+              </label>
+              <select
+                value={extractionDepth}
+                onChange={(e) => setExtractionDepth(e.target.value)}
+                className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="capability">Capability Only</option>
+                <option value="process">Process Level</option>
+                <option value="subprocess">SubProcess Level</option>
+                <option value="data_entity">Data Entity Level</option>
+                <option value="data_element">Data Element Level</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Files List Card */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">
+              Files ({files.length})
+            </h3>
+
+            {files.length === 0 ? (
+              <div className="text-center py-4">
+                <FiFile className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                <p className="text-xs text-gray-500">No files selected</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                {files.map((file) => (
+                  <div
+                    key={file.id}
+                    className="bg-gray-50 rounded border border-gray-200 p-2 hover:bg-gray-100 transition-colors text-xs"
+                  >
+                    <div className="flex items-start justify-between gap-1 mb-1">
+                      <div className="flex items-start gap-1 flex-1 min-w-0">
+                        <FiFile className="w-3 h-3 text-gray-400 mt-0.5 flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-gray-900 truncate">{file.name}</p>
+                          <p className="text-xs text-gray-500">{formatFileSize(file.size)}</p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => removeFile(file.id)}
+                        className="text-gray-400 hover:text-gray-600 flex-shrink-0"
+                      >
+                        <FiX size={14} />
+                      </button>
+                    </div>
+
+                    {/* Status and Progress */}
+                    <div className="flex items-center gap-1">
+                      {file.status === 'pending' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">
+                          <span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
+                          Pending
+                        </span>
+                      )}
+                      {(file.status === 'uploading' || file.status === 'extracting') && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">
+                          <FiLoader size={10} className="animate-spin" />
+                          {Math.round(file.progress)}%
+                        </span>
+                      )}
+                      {file.status === 'success' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs">
+                          <FiCheckCircle size={10} />
+                          Done
+                        </span>
+                      )}
+                      {file.status === 'error' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs">
+                          <FiAlertCircle size={10} />
+                          Error
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Main Content: Upload Area and Stats */}
+        <div className="lg:col-span-3">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
             <div
               onDragEnter={handleDragEnter}
               onDragLeave={handleDragLeave}
               onDragOver={handleDragOver}
               onDrop={handleDrop}
-              className={`relative border-2 border-dashed rounded-lg p-12 text-center transition-all duration-200 ${
+              className={`relative border-2 border-dashed rounded-lg p-6 text-center transition-all duration-200 ${
                 isDragging
                   ? 'border-indigo-500 bg-indigo-50'
                   : 'border-gray-300 bg-gray-50 hover:border-indigo-400 hover:bg-indigo-50'
               }`}
             >
               <div className="flex flex-col items-center">
-                <div className="mb-4 p-3 bg-indigo-100 rounded-full">
-                  <FiUpload className="w-8 h-8 text-indigo-600" />
+                <div className="mb-2 p-2 bg-indigo-100 rounded-full">
+                  <FiUpload className="w-5 h-5 text-indigo-600" />
                 </div>
-                <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                  {isDragging ? 'Drop files here' : 'Drag and drop your documents'}
+                <h3 className="text-base font-semibold text-gray-900 mb-1">
+                  {isDragging ? 'Drop files here' : 'Drag and drop documents'}
                 </h3>
-                <p className="text-gray-600 mb-4">
-                  Upload PDFs, Word documents, or text files for extraction
+                <p className="text-sm text-gray-600 mb-3">
+                  or <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-indigo-600 hover:text-indigo-700 font-medium"
+                  >
+                    select files
+                  </button>
                 </p>
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium"
-                >
-                  Select Files
-                </button>
-                <p className="text-xs text-gray-500 mt-4">
-                  Supported: PDF, DOCX, TXT (Max 100MB per file)
+                <p className="text-xs text-gray-500">
+                  PDF, DOCX, TXT (Max 100MB)
                 </p>
               </div>
 
@@ -425,37 +554,37 @@ const CompassIngestion: React.FC = () => {
             </div>
 
             {files.length > 0 && (
-              <div className="mt-6 pt-6 border-t border-gray-200">
-                <div className="grid grid-cols-4 gap-3 mb-6">
-                  <div className="text-center p-3 bg-blue-50 rounded-lg">
-                    <p className="text-2xl font-bold text-blue-600">
+              <div className="mt-4 pt-4 border-t border-gray-200">
+                <div className="grid grid-cols-4 gap-2 mb-4">
+                  <div className="text-center p-2 bg-blue-50 rounded">
+                    <p className="text-lg font-bold text-blue-600">
                       {pendingCount}
                     </p>
-                    <p className="text-sm text-gray-600">Pending</p>
+                    <p className="text-xs text-gray-600">Pending</p>
                   </div>
-                  <div className="text-center p-3 bg-yellow-50 rounded-lg">
-                    <p className="text-2xl font-bold text-yellow-600">
+                  <div className="text-center p-2 bg-yellow-50 rounded">
+                    <p className="text-lg font-bold text-yellow-600">
                       {files.filter(
                         (f) => f.status === 'uploading' || f.status === 'extracting'
                       ).length}
                     </p>
-                    <p className="text-sm text-gray-600">Processing</p>
+                    <p className="text-xs text-gray-600">Processing</p>
                   </div>
-                  <div className="text-center p-3 bg-green-50 rounded-lg">
-                    <p className="text-2xl font-bold text-green-600">{successCount}</p>
-                    <p className="text-sm text-gray-600">Extracted</p>
+                  <div className="text-center p-2 bg-green-50 rounded">
+                    <p className="text-lg font-bold text-green-600">{successCount}</p>
+                    <p className="text-xs text-gray-600">Extracted</p>
                   </div>
-                  <div className="text-center p-3 bg-red-50 rounded-lg">
-                    <p className="text-2xl font-bold text-red-600">{errorCount}</p>
-                    <p className="text-sm text-gray-600">Failed</p>
+                  <div className="text-center p-2 bg-red-50 rounded">
+                    <p className="text-lg font-bold text-red-600">{errorCount}</p>
+                    <p className="text-xs text-gray-600">Failed</p>
                   </div>
                 </div>
 
-                <div className="flex gap-3">
+                <div className="flex gap-2">
                   <button
                     onClick={handleUploadAll}
                     disabled={pendingCount === 0 || isProcessing}
-                    className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-sm"
                   >
                     <FiUpload size={18} />
                     Extract {pendingCount > 0 ? `${pendingCount} File(s)` : 'Files'}
@@ -463,7 +592,7 @@ const CompassIngestion: React.FC = () => {
                   <button
                     onClick={removeAllFiles}
                     disabled={isProcessing}
-                    className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-medium disabled:opacity-50"
+                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                   >
                     Clear All
                   </button>
@@ -472,142 +601,8 @@ const CompassIngestion: React.FC = () => {
             )}
           </div>
         </div>
-
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <h3 className="font-semibold text-gray-900 mb-4">
-              Files ({files.length})
-            </h3>
-
-            {files.length === 0 ? (
-              <div className="text-center py-8">
-                <FiFile className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                <p className="text-gray-500 text-sm">No files selected</p>
-              </div>
-            ) : (
-              <div className="space-y-3 max-h-[600px] overflow-y-auto">
-                {files.map((file) => (
-                  <div
-                    key={file.id}
-                    className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden hover:bg-gray-100 transition-colors"
-                  >
-                    <div className="p-3">
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex items-start gap-2 flex-1 min-w-0">
-                          <FiFile className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium text-gray-900 truncate">
-                              {file.name}
-                            </p>
-                            <p className="text-xs text-gray-500">
-                              {formatFileSize(file.size)}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex gap-1">
-                          {file.extractedData && (
-                            <button
-                              onClick={() => {
-                                setModalData(file.extractedData || null);
-                                setModalFileId(file.id);
-                                setShowModal(true);
-                              }}
-                              className="p-1 hover:bg-gray-300 rounded transition-colors"
-                              title="Show details"
-                            >
-                              <FiChevronDown className="w-4 h-4 text-gray-600" />
-                            </button>
-                          )}
-                          {file.status !== 'uploading' &&
-                            file.status !== 'extracting' && (
-                              <button
-                                onClick={() => removeFile(file.id)}
-                                className="p-1 hover:bg-gray-300 rounded transition-colors"
-                                title="Remove file"
-                              >
-                                <FiX className="w-4 h-4 text-gray-400 hover:text-gray-600" />
-                              </button>
-                            )}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 mb-2">
-                        {file.status === 'pending' && (
-                          <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded">
-                            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-                            Pending
-                          </span>
-                        )}
-                        {file.status === 'uploading' && (
-                          <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-yellow-100 text-yellow-700 rounded">
-                            <FiLoader className="w-3 h-3 animate-spin" />
-                            Uploading
-                          </span>
-                        )}
-                        {file.status === 'extracting' && (
-                          <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-yellow-100 text-yellow-700 rounded">
-                            <FiLoader className="w-3 h-3 animate-spin" />
-                            Extracting ({file.progress}%)
-                          </span>
-                        )}
-                        {file.status === 'success' && (
-                          <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-green-100 text-green-700 rounded">
-                            <FiCheckCircle className="w-3 h-3" />
-                            Extracted
-                          </span>
-                        )}
-                        {file.status === 'error' && (
-                          <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-red-100 text-red-700 rounded">
-                            <FiAlertCircle className="w-3 h-3" />
-                            Error
-                          </span>
-                        )}
-                      </div>
-
-                      {(file.status === 'uploading' ||
-                        file.status === 'extracting') && (
-                        <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
-                          <div
-                            className="bg-indigo-600 h-full transition-all duration-300"
-                            style={{ width: `${file.progress}%` }}
-                          />
-                        </div>
-                      )}
-
-                      {file.error && (
-                        <p className="text-xs text-red-600 mt-2">{file.error}</p>
-                      )}
-
-                      {file.status === 'success' && file.extractedData && (
-                        <button
-                          onClick={() => handleImportToGraph(file.id)}
-                          disabled={importingFileId === file.id}
-                          className="mt-3 w-full px-3 py-1.5 bg-green-600 text-white text-xs rounded hover:bg-green-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
-                        >
-                          {importingFileId === file.id ? (
-                            <>
-                              <FiLoader size={12} className="animate-spin" />
-                              Importing...
-                            </>
-                          ) : (
-                            <>
-                              <FiUpload size={12} />
-                              Import to Graph
-                            </>
-                          )}
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Extracted Data Details */}
-                      {/* details are shown in modal popup now */}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
       </div>
+
       {/* Agent thinking overlay */}
       {isThinking && (
         <div className="fixed top-4 right-4 z-50 bg-white/90 backdrop-blur rounded-lg shadow px-4 py-2 flex items-center gap-3">
