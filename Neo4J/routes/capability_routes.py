@@ -79,3 +79,43 @@ def get_all_entities(entity_type: str = Path(..., description="Entity type, e.g.
         return service.get_all_application_catalogs()
     else:
         raise HTTPException(status_code=400, detail=f"Service for {entity_type} does not support listing all entities")
+
+
+@router.delete("/id/{capability_id}")
+def delete_capability_by_id(capability_id: int = Path(..., description="Capability UID")):
+    """
+    Delete a capability by its ID along with all its related subprocesses,
+    data entities, and data elements.
+    """
+    try:
+        result = CapabilityService.delete_by_id(capability_id)
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Capability with ID {capability_id} not found")
+        
+        return {
+            "status": "success",
+            "message": f"Capability with ID {capability_id} deleted successfully",
+            "capability_id": capability_id
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete capability: {str(e)}")
+
+
+@router.delete("/name/{capability_name}")
+def delete_capability_by_name(capability_name: str = Path(..., description="Capability name")):
+    """
+    Delete a capability by its name along with all its related subprocesses,
+    data entities, and data elements.
+    """
+    try:
+        result = CapabilityService.delete_by_name(capability_name)
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Capability with name '{capability_name}' not found")
+        
+        return {
+            "status": "success",
+            "message": f"Capability '{capability_name}' deleted successfully",
+            "capability_name": capability_name
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete capability: {str(e)}")

@@ -1,11 +1,9 @@
 """
 Azure OpenAI LLM Thinking Module
-
 Handles AI reasoning and query processing using Azure OpenAI LLM provider with chain-of-thought capability.
 This module provides LLM thinking capabilities for analyzing user queries against vertical data
 and returning both the agent's reasoning process and final results.
 """
-
 import logging
 import json
 import os

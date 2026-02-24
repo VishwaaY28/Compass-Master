@@ -1,11 +1,15 @@
 import logging
 import re
 logging.basicConfig(level=logging.INFO)
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from tortoise.contrib.pydantic import pydantic_model_creator
+import asyncio
+import json
+import tempfile
+import os
 
 from database.repositories import capability_repository, process_repository, vertical_repository, prompt_template_repository
 from database.models import Capability as CapabilityModel, Process as ProcessModel, Vertical as VerticalModel, SubVertical as SubVerticalModel, SubProcess as SubProcessModel
@@ -16,9 +20,9 @@ from utils.llm_independent import azure_openai_independent_client
 from utils.csv_export import get_csv_exporter
 from utils.llm_logger import log_llm_call
 from config.llm_settings import llm_settings_manager
+from utils.deepagent_extractor import extract_capability_model, validate_extracted_model
 import io
 import csv
-import json
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -1893,21 +1897,31 @@ async def compass_chat_independent(payload: CompassChatRequest):
             vertical_data=vertical_data,
         )
 
-        logger.info(f"[CompassChat Independent] Analysis complete")
+        # VALIDATION: Log response details for debugging
+        thinking_len = len(thinking) if thinking else 0
+        result_len = len(result) if result else 0
+        logger.info(f"[CompassChat Independent] Analysis complete - Thinking length: {thinking_len}, Result length: {result_len}")
+        
+        # WARNING: If result is empty, log it for debugging
+        if not result or result.strip() == "":
+            logger.warning(f"[CompassChat Independent] EMPTY RESULT DETECTED! Thinking: {thinking[:200] if thinking else 'None'}")
 
         # Get system prompt for frontend logging
         system_prompt = azure_openai_independent_client.get_last_system_prompt() or ""
 
-        return {
+        response_obj = {
             "status": "success",
             "query": query,
             "vertical": vertical_name,
-            "thinking": thinking,
-            "result": result,
+            "thinking": thinking or "",  # Ensure never None
+            "result": result or "",  # Ensure never None
             "system_prompt_independent": system_prompt,
             # Include VMO metadata if available from thinking client
             "vmo_meta": azure_openai_thinking_client.get_last_vmo_meta() or {},
         }
+        
+        logger.debug(f"[CompassChat Independent] Response keys: {list(response_obj.keys())}, result_type: {type(response_obj['result'])}")
+        return response_obj
 
     except HTTPException:
         raise
@@ -2063,3 +2077,401 @@ async def _build_vertical_context(vertical) -> dict:
     except Exception as e:
         logger.error(f"Error building vertical context: {e}", exc_info=True)
         return {"vertical_name": vertical.name, "capabilities": []}
+
+
+# ========== DOCUMENT INGESTION & EXTRACTION ==========
+
+class CapabilityImportRequest(BaseModel):
+    """Request to import extracted capability model into the database"""
+    model_data: dict  # The extracted capability model JSON
+
+
+@router.post("/upload/pdf")
+async def upload_and_extract_pdf(file: UploadFile = File(...)):
+    """
+    Upload a PDF/document and extract capability model using DeepAgent.
+    
+    Streams extraction progress back to the frontend in real-time.
+    Each event is a JSON object on its own line (JSONL format).
+    
+    Frontend should handle:
+    - "started": Extraction beginning
+    - "loading": Document loading progress
+    - "extracting": LLM extraction in progress
+    - "success": Extraction complete with data
+    - "error": Extraction failed
+    
+    Returns:
+        StreamingResponse with JSONL-formatted progress events
+    """
+    
+    # Validate file type
+    allowed_extensions = {'.pdf', '.docx', '.doc', '.txt'}
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    
+    if file_ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(allowed_extensions)}"
+        )
+    
+    # Save uploaded file to temp location
+    temp_dir = tempfile.gettempdir()
+    temp_file_path = os.path.join(temp_dir, file.filename)
+    
+    try:
+        # Save the uploaded file
+        contents = await file.read()
+        with open(temp_file_path, "wb") as f:
+            f.write(contents)
+        
+        logger.info(f"Uploaded file saved to: {temp_file_path}")
+        
+        # Stream extraction progress
+        async def generate_extraction_stream():
+            """Generator that yields JSONL events from the extraction process"""
+            async for event in extract_capability_model(temp_file_path, temp_dir):
+                # Yield each event as a JSON line
+                yield json.dumps(event) + "\n"
+        
+        return StreamingResponse(
+            generate_extraction_stream(),
+            media_type="application/x-ndjson",
+            headers={
+                "Content-Disposition": f"inline"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Upload failed: {type(e).__name__}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Upload failed: {str(e)}"
+        )
+    finally:
+        # Clean up temp file after streaming starts (file will be referenced by extractor)
+        pass  # Don't delete yet - extractor may still use it
+
+
+@router.post("/upload/import-to-graph")
+async def import_extracted_model_to_graph(payload: CapabilityImportRequest):
+    """
+    Import an extracted capability model into the graph database.
+    
+    Takes the JSON model structure from the DeepAgent extraction
+    and imports it as Capability -> Vertical -> SubVertical -> Process -> SubProcess
+    structure in the database.
+    
+    Args:
+        payload.model_data: The extracted capability model JSON
+        
+    Returns:
+        Success response with import summary
+    """
+    
+    try:
+        model_data = payload.model_data
+        
+        # Validate the model structure
+        is_valid, errors = validate_extracted_model(model_data)
+        if not is_valid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid model structure: {'; '.join(errors)}"
+            )
+        
+        logger.info(f"Starting import of capability model: {model_data.get('name', 'Unknown')}")
+        
+        # Extract top-level information
+        capability_name = model_data.get("name", "Unnamed Capability")
+        capability_description = model_data.get("description", "")
+        vertical_name = model_data.get("vertical", "General")
+        subvertical_name = model_data.get("subvertical", "General")
+        
+        # Step 1: Create or fetch vertical
+        existing_verticals = await vertical_repository.fetch_all_verticals()
+        vertical = None
+        for v in existing_verticals:
+            if v.name.lower() == vertical_name.lower():
+                vertical = v
+                break
+        
+        if not vertical:
+            vertical = await vertical_repository.create_vertical(vertical_name)
+            logger.info(f"Created vertical: {vertical_name}")
+        else:
+            logger.info(f"Using existing vertical: {vertical_name}")
+        
+        # Step 2: Create or fetch subvertical
+        existing_subverticals = await vertical_repository.fetch_subverticals_by_vertical(vertical.id)
+        subvertical = None
+        for sv in existing_subverticals:
+            if sv.name.lower() == subvertical_name.lower():
+                subvertical = sv
+                break
+        
+        if not subvertical:
+            subvertical = await vertical_repository.create_subvertical(subvertical_name, vertical.id)
+            logger.info(f"Created subvertical: {subvertical_name}")
+        else:
+            logger.info(f"Using existing subvertical: {subvertical_name}")
+        
+        # Step 3: Create capability
+        capability = await capability_repository.create_capability(
+            capability_name,
+            capability_description,
+            subvertical.id
+        )
+        logger.info(f"Created capability: {capability_name} (ID: {capability.id})")
+        
+        # Step 4: Create processes, subprocesses, data entities and data elements
+        process_count = 0
+        subprocess_count = 0
+        data_entity_count = 0
+        data_element_count = 0
+        # Prepare Cypher lines to sync to Neo4j cloud via /execute-cypher
+        cypher_lines = []
+
+        def _esc(val: str) -> str:
+            if val is None:
+                return ""
+            s = str(val)
+            s = s.replace('\\', '\\\\')
+            s = s.replace("'", "\\'")
+            return s
+
+        # Merge top-level vertical/subvertical/capability in cypher
+        # Include uid from local database for retrieval
+        cypher_lines.append(f"MERGE (v:Vertical {{uid: {vertical.id}, name: '{_esc(vertical_name)}'}})")
+        cypher_lines.append(f"MERGE (sv:SubVertical {{uid: {subvertical.id}, name: '{_esc(subvertical_name)}'}})")
+        cypher_lines.append("MERGE (v)-[:HAS_SUBVERTICAL]->(sv)")
+        cypher_lines.append(f"MERGE (c:Capability {{uid: {capability.id}, name: '{_esc(capability_name)}'}})")
+        cypher_lines.append("MERGE (sv)-[:HAS_CAPABILITY]->(c)")
+        # counters to create unique variable names in the cypher batch (avoid redeclaration)
+        _proc_counter = 0
+        _subproc_counter = 0
+        _de_counter = 0
+        _delem_counter = 0
+
+        for process_data in model_data.get("processes", []):
+            process_name = process_data.get("name", "Unnamed Process")
+            process_description = process_data.get("description", "")
+            raw_level = str(process_data.get("level", "core") or "core")
+            process_category = process_data.get("category", "")
+
+            # Normalize process level to allowed ProcessLevel values
+            lvl = raw_level.strip().lower()
+            level_map = {
+                "enterprise": "enterprise",
+                "enterpise": "enterprise",
+                "core": "core",
+                "process": "process",
+                # Map common terms to a safe enum value
+                "support": "process",
+                "supporting": "process",
+                "supporting function": "process",
+                "operational": "process",
+            }
+            process_level = level_map.get(lvl, "process")
+            
+            # Create process with subprocesses
+            subprocesses_list = []
+            for subprocess_data in process_data.get("subprocesses", []):
+                subproc = {
+                    "name": subprocess_data.get("name", "Unnamed SubProcess"),
+                    "description": subprocess_data.get("description", ""),
+                    "category": subprocess_data.get("category", "")
+                }
+                subprocesses_list.append(subproc)
+            
+            process = await process_repository.create_process(
+                process_name,
+                process_level,
+                process_description,
+                capability.id,
+                subprocesses=subprocesses_list,
+                category=process_category
+            )
+            
+            process_count += 1
+            subprocess_count += len(subprocesses_list)
+            logger.info(f"Created process: {process_name} with {len(subprocesses_list)} subprocesses")
+
+            # Add process MERGE and relationship to capability (use a unique var)
+            _proc_counter += 1
+            p_var = f"p{_proc_counter}"
+            cypher_lines.append(f"MERGE ({p_var}:Process {{uid: {process.id}, name: '{_esc(process_name)}', level: '{_esc(process_level)}'}})")
+            cypher_lines.append(f"MERGE (c)-[:HAS_PROCESS]->({p_var})")
+
+            # --- Persist Data Entities and Data Elements (if provided by extractor) ---
+            # Import models locally to avoid top-level coupling
+            from database.models import DataEntity, DataElement, SubProcess as SubProcessModel
+
+            try:
+                # Fetch created subprocess records for this process so we can attach data entities
+                created_subprocs = await SubProcessModel.filter(process_id=process.id).all()
+                # Build a lookup by name (lowercased) to match extractor payloads
+                subproc_lookup = { (s.name or "").strip().lower(): s for s in created_subprocs }
+
+                for subprocess_data in process_data.get("subprocesses", []):
+                    subproc_name = (subprocess_data.get("name") or "").strip()
+                    if not subproc_name:
+                        continue
+
+                    subproc = subproc_lookup.get(subproc_name.lower())
+                    if not subproc:
+                        # Try a looser match (starts-with) as a fallback
+                        subproc = next((s for k, s in subproc_lookup.items() if k.startswith(subproc_name.lower()[:10])), None)
+                    if not subproc:
+                        logger.debug(f"SubProcess not found for data entities: {subproc_name}")
+                        continue
+
+                    # Ensure a SubProcess node is created in Neo4j and related to the Process (unique var)
+                    _subproc_counter += 1
+                    sp_var = f"sp{_subproc_counter}"
+                    cypher_lines.append(f"MERGE ({sp_var}:Subprocess {{uid: {subproc.id}, name: '{_esc(subproc_name)}'}})")
+                    cypher_lines.append(f"MERGE ({p_var})-[:DECOMPOSES]->({sp_var})")
+
+                    # Extract data entities list - extractor may use either 'data_entities' or 'data_entity' keys
+                    data_entities = subprocess_data.get("data_entities") or subprocess_data.get("data_entity") or []
+                    if isinstance(data_entities, dict):
+                        # Single object provided, wrap into list
+                        data_entities = [data_entities]
+
+                    for de in data_entities:
+                        # Support multiple possible key names coming from the LLM
+                        data_entity_name = de.get("data_entity_name") or de.get("name") or de.get("data_entity") or ""
+                        data_entity_description = de.get("data_entity_description") or de.get("description") or de.get("data_entity_description") or ""
+                        if not data_entity_name:
+                            continue
+
+                        # Create or get DataEntity under this SubProcess
+                        data_entity, de_created = await DataEntity.get_or_create(
+                            name=data_entity_name,
+                            subprocess=subproc,
+                            defaults={
+                                "description": data_entity_description
+                            }
+                        )
+                        # If get_or_create returned tuple style (older tortoise), ensure we handle it
+                        if isinstance(data_entity, tuple):
+                            data_entity = data_entity[0]
+                            de_created = data_entity[1] if len(data_entity) > 1 else False
+
+                        if de_created:
+                            logger.info(f"✓ Created DataEntity: {data_entity_name} (ID: {data_entity.id})")
+                            data_entity_count += 1
+                        else:
+                            logger.debug(f"↻ DataEntity already exists: {data_entity_name}")
+
+                        # Add DataEntity MERGE and relationship (unique var)
+                        _de_counter += 1
+                        de_var = f"de{_de_counter}"
+                        cypher_lines.append(f"MERGE ({de_var}:DataEntity {{uid: {data_entity.id}, name: '{_esc(data_entity_name)}'}})")
+                        cypher_lines.append(f"MERGE ({sp_var})-[:USES_DATA]->({de_var})")
+
+                        # Create data elements under the data entity
+                        data_elements = de.get("data_elements") or de.get("elements") or []
+                        if isinstance(data_elements, dict):
+                            data_elements = [data_elements]
+
+                        for elem in data_elements:
+                            data_element_name = elem.get("data_element_name") or elem.get("name") or elem.get("data_element") or ""
+                            data_element_description = elem.get("data_element_description") or elem.get("description") or ""
+                            if not data_element_name:
+                                continue
+
+                            data_element, del_created = await DataElement.get_or_create(
+                                name=data_element_name,
+                                data_entity=data_entity,
+                                defaults={
+                                    "description": data_element_description
+                                }
+                            )
+                            if isinstance(data_element, tuple):
+                                data_element = data_element[0]
+                                del_created = data_element[1] if len(data_element) > 1 else False
+
+                            if del_created:
+                                logger.info(f"✓ Created DataElement: {data_element_name} under {data_entity.name}")
+                                data_element_count += 1
+                            else:
+                                logger.debug(f"↻ DataElement already exists: {data_element_name}")
+
+                            # Add DataElement MERGE and relationship (unique var)
+                            _delem_counter += 1
+                            delem_var = f"delem{_delem_counter}"
+                            cypher_lines.append(f"MERGE ({delem_var}:DataElements {{uid: {data_element.id}, name: '{_esc(data_element_name)}'}})")
+                            cypher_lines.append(f"MERGE ({de_var})-[:HAS_ELEMENT]->({delem_var})")
+
+            except Exception as e:
+                logger.warning(f"Failed to persist data entities/elements for process {process_name}: {e}")
+        
+        logger.info(f"Import completed successfully")
+        # After local DB insertions, attempt to sync to Neo4j cloud via the API
+        try:
+            import requests
+
+            cypher_query = "\n".join(cypher_lines)
+            # POST to Neo4J API (separate service)
+            try:
+                r = requests.post("http://localhost:5000/execute-cypher", json={"query": cypher_query}, timeout=30)
+                if r.status_code == 200:
+                    logger.info("Synced imported model to Neo4j cloud successfully")
+                else:
+                    logger.warning(f"Neo4j sync returned status {r.status_code}: {r.text}")
+            except Exception as e:
+                logger.warning(f"Failed to call Neo4j API to execute cypher: {e}")
+        except Exception:
+            # Avoid failing the import if sync machinery has issues
+            logger.exception("Unexpected error while preparing Neo4j sync")
+
+        return JSONResponse({
+            "status": "success",
+            "message": "Model imported successfully",
+            "summary": {
+                "capability_name": capability_name,
+                "vertical": vertical_name,
+                "subvertical": subvertical_name,
+                "capability_id": capability.id,
+                "processes_created": process_count,
+                "subprocesses_created": subprocess_count,
+                "data_entities_created": data_entity_count,
+                "data_elements_created": data_element_count
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Import failed: {type(e).__name__}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Import failed: {str(e)}"
+        )
+
+
+@router.get("/upload/formats-info")
+async def get_supported_formats():
+    """Get information about supported file formats for ingestion"""
+    return JSONResponse({
+        "supported_formats": [
+            {
+                "extension": ".pdf",
+                "name": "PDF Document",
+                "description": "Adobe PDF files"
+            },
+            {
+                "extension": ".docx",
+                "name": "Word Document",
+                "description": "Microsoft Word (.docx) files"
+            },
+            {
+                "extension": ".txt",
+                "name": "Text File",
+                "description": "Plain text files"
+            }
+        ],
+        "max_file_size_mb": 100,
+        "extraction_method": "DeepAgent with Azure OpenAI LLM",
+        "output_format": "Capability Model JSON"
+    })
+    
