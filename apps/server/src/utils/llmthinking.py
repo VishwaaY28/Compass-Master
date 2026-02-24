@@ -1,11 +1,9 @@
 """
 Azure OpenAI LLM Thinking Module
-
 Handles AI reasoning and query processing using Azure OpenAI LLM provider with chain-of-thought capability.
 This module provides LLM thinking capabilities for analyzing user queries against vertical data
 and returning both the agent's reasoning process and final results.
 """
-
 import logging
 import json
 import os
@@ -393,11 +391,14 @@ class AzureOpenAIThinkingClient:
                 logger.error(f"Azure API Error - Deployment: {deployment}, Error: {str(api_error)}")
                 raise
 
-            # Extract and parse response
+            # Extract thinking and result from response
             response_text = response.choices[0].message.content
             logger.info("[LLM RESPONSE RECEIVED] Successfully received response from Azure OpenAI LLM")
             logger.info(f"[LLM RESPONSE DETAILS] Response length={len(response_text)} chars, model={deployment}")
-            thinking, result = self._parse_response(response_text)
+            
+            # Extract reasoning_content if available (Kimi model native thinking)
+            reasoning_content = getattr(response.choices[0].message, 'reasoning_content', None)
+            thinking, result = self._parse_response(response_text, reasoning_content)
             logger.info(f"[LLM RESPONSE PARSED] Thinking section length={len(thinking)} chars, Result section length={len(result)} chars")
             logger.info(f"Successfully processed query with VMO prompt: {query[:50]}...")
             return thinking, result, request_id
@@ -498,42 +499,66 @@ class AzureOpenAIThinkingClient:
             in_thinking = False
             thinking_started = False
             chunk_count = 0
+            reasoning_chunks = []  # Collect reasoning chunks for Kimi native reasoning
+            has_reasoning_field = False  # Track if the response has native reasoning
 
             for chunk in stream:
+                # Check for native reasoning_content in the response (Kimi model)
+                if chunk.choices[0].delta and hasattr(chunk.choices[0].delta, 'reasoning_content'):
+                    reasoning_text = chunk.choices[0].delta.reasoning_content
+                    if reasoning_text:
+                        has_reasoning_field = True
+                        reasoning_chunks.append(reasoning_text)
+                
+                # Handle regular content
                 if chunk.choices[0].delta.content:
                     text = chunk.choices[0].delta.content
                     buffer += text
 
-                    # Check for thinking section markers
-                    if "<thinking>" in buffer:
-                        in_thinking = True
-                        thinking_started = True
-                        before, after = buffer.split("<thinking>", 1)
-                        
-                        # Yield any text before thinking tags
-                        if before.strip():
-                            yield ("text", before)
-                        
-                        buffer = after
+                    # Only parse for thinking tags if no native reasoning field exists
+                    if not has_reasoning_field:
+                        # Check for thinking section markers
+                        if "<thinking>" in buffer:
+                            in_thinking = True
+                            thinking_started = True
+                            before, after = buffer.split("<thinking>", 1)
+                            
+                            # Yield any text before thinking tags
+                            if before.strip():
+                                yield ("text", before)
+                            
+                            buffer = after
 
-                    if "</thinking>" in buffer and in_thinking:
-                        thinking_text, after = buffer.split("</thinking>", 1)
-                        
-                        # Yield the complete thinking section
-                        if thinking_text.strip():
-                            yield ("thinking", thinking_text.strip())
-                        
-                        in_thinking = False
-                        buffer = after
+                        if "</thinking>" in buffer and in_thinking:
+                            thinking_text, after = buffer.split("</thinking>", 1)
+                            
+                            # Yield the complete thinking section
+                            if thinking_text.strip():
+                                yield ("thinking", thinking_text.strip())
+                            
+                            in_thinking = False
+                            buffer = after
 
-                    # Yield buffered result content periodically (when not in thinking)
-                    if not in_thinking and len(buffer) > 100:
-                        yield ("result", buffer)
-                        buffer = ""
+                        # Yield buffered result content periodically (when not in thinking)
+                        if not in_thinking and len(buffer) > 100:
+                            yield ("result", buffer)
+                            buffer = ""
+                    else:
+                        # If we have native reasoning, stream result content
+                        if len(buffer) > 100:
+                            yield ("result", buffer)
+                            buffer = ""
+
+            # Yield any accumulated reasoning from native field
+            if reasoning_chunks:
+                reasoning_content = "".join(reasoning_chunks).strip()
+                if reasoning_content:
+                    logger.info(f"Yielding native reasoning from Kimi model (length={len(reasoning_content)} chars)")
+                    yield ("thinking", reasoning_content)
 
             # Yield remaining content
             if buffer:
-                if in_thinking:
+                if in_thinking and not has_reasoning_field:
                     # If we're still in thinking mode, yield as thinking
                     yield ("thinking", buffer.strip())
                 else:
@@ -541,7 +566,7 @@ class AzureOpenAIThinkingClient:
                     if buffer.strip():
                         yield ("result", buffer.strip())
             
-            logger.info(f"Stream completed for query: {query[:50]}...")
+            logger.info(f"Stream completed for query: {query[:50]}... (native_reasoning={has_reasoning_field})")
 
         except Exception as e:
             logger.error(f"Error in stream_think_and_analyze: {e}")
@@ -1073,29 +1098,51 @@ You are an expert Enterprise Architecture Consultant for the Capital Markets Vir
 - portfolio manager: Focus on the "How." Detail process relationships, workflows, and dependencies.
 - Investment Analyst: Maximum fidelity. Include technical IDs, Data Element definitions, and exhaustive lineage mapping.
  
-### STRUCTURE OF RESPONSE
+### RESPONSE STRUCTURE
 1. TARGET ENTITY: [Target Entity: Name]
-2. THINKING BLOCK: Use <thinking> tags to map the query to the meta-model and justify your response "altitude" based on the Persona.
+2. ANALYSIS: Map the query to the meta-model and justify your response "altitude" based on the Persona.
 3. TAILORED RESPONSE: The persona-specific synthesis.
 """
         return system_message
 
     pass
 
-    def _parse_response(self, response_text: str) -> Tuple[str, str]:
-        """Parse the LLM response into thinking and result sections"""
+    def _parse_response(self, response_text: str, reasoning_content: Optional[str] = None) -> Tuple[str, str]:
+        """
+        Parse the LLM response into thinking and result sections.
+        
+        Prioritizes native reasoning_content from Kimi model over parsing explicit tags.
+        
+        Args:
+            response_text: The main response content from the LLM
+            reasoning_content: Native reasoning output from Kimi model (optional)
+            
+        Returns:
+            Tuple of (thinking, result)
+        """
         thinking = ""
         result = ""
 
         try:
+            # Priority 1: Use native reasoning_content from Kimi model if available
+            if reasoning_content:
+                thinking = reasoning_content.strip()
+                result = response_text.strip()
+                logger.debug(f"Using native reasoning_content from Kimi model (length={len(thinking)} chars)")
+                return thinking, result
+            
+            # Priority 2: Parse explicit thinking tags if no native reasoning available
             if "<thinking>" in response_text and "</thinking>" in response_text:
                 parts = response_text.split("<thinking>")
                 thinking = parts[1].split("</thinking>")[0].strip()
                 result = parts[1].split("</thinking>")[1].strip()
-            else:
-                # If no explicit thinking tags, treat all as result
-                result = response_text.strip()
-                thinking = "Analysis in progress..."
+                logger.debug(f"Extracted thinking from explicit tags (length={len(thinking)} chars)")
+                return thinking, result
+            
+            # Fallback: If no explicit thinking tags, treat all as result
+            result = response_text.strip()
+            thinking = "Analysis in progress..."
+            logger.debug("No explicit thinking tags found, using fallback response format")
 
         except Exception as e:
             logger.warning(f"Error parsing response: {e}")

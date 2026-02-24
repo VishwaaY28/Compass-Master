@@ -113,5 +113,5 @@ if __name__ == "__main__":
         host='0.0.0.0',
         port=8005,
         log_level=env["LOG_LEVEL"].lower(),
-        reload=False,
+        reload=True,
     )

@@ -51,6 +51,14 @@ async def seed_database():
                 Path(__file__).parent.parent.parent.parent / 'elements_fixed.csv',
                 Path('elements_fixed.csv'),
             ]
+        },
+        {
+            'name': 'EBRD_Compass.csv',
+            'paths': [
+                Path(__file__).parent.parent.parent / 'EBRD_Compass.csv',
+                Path(__file__).parent.parent.parent.parent / 'EBRD_Compass.csv',
+                Path('EBRD_Compass.csv'),
+            ]
         }
     ]
     
@@ -148,8 +156,8 @@ async def _seed_from_csv(csv_path, csv_name: str):
             data_entity_description = get_column_value(row, 'Data Entity Description', 'Data Entities', 'data_entity', 'data_entities')
             data_element_name = get_column_value(row, 'Data Element', 'Data Elements', 'Element', 'data_element', 'element')
             data_element_description = get_column_value(row, 'Data Element Description', 'Data Elements', 'Element', 'data_element', 'element')
-            application = get_column_value(row, 'Applications', 'App', 'System', 'application', 'app', 'system')
-            api = get_column_value(row, 'API', 'APIs', 'Endpoints', 'api', 'apis', 'endpoints')
+            application = get_column_value(row, 'Applications', 'App', 'Application', 'application', 'app', 'system')
+            api = get_column_value(row, 'API', 'APIs', 'Endpoints', 'api', 'apis', 'endpoints','API (Assumption)')
             
             try:
                 # Skip rows without capability name
