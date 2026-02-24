@@ -84,7 +84,6 @@ def load_document(path: str, chunk_size: int = 1800, chunk_overlap: int = 200) -
         if "page" not in md and "page_number" in md:
             md["page"] = md["page_number"]
         out.append({"text": d.page_content, "metadata": md})
-    
     return out
 
 
@@ -179,7 +178,6 @@ REQUIREMENTS:
 - Prefer nouns for Capabilities and Processes; Subprocesses are action-centric but concise.
 - Data Entities are business nouns; Data Elements are atomic attributes on entities with datatypes.
 - Return only the JSON object (no extra text, no markdown).
-- Include ALL levels: Capability -> Vertical -> SubVertical -> Process -> SubProcess -> DataEntity -> DataElement
 """
 
 
@@ -207,7 +205,6 @@ def _get_azure_llm():
             api_key=api_key,
             streaming=True,
         )
-        
         return llm
         
     except Exception as e:
@@ -223,19 +220,58 @@ def build_extraction_agent():
         Configured DeepAgent instance with tools and system prompt
     """
     llm = _get_azure_llm()
-    
     agent = create_deep_agent(
         model=llm,
         tools=[load_document, write_json],
         system_prompt=EXTRACTION_INSTRUCTIONS,
     )
-    
     return agent
+
+
+def _build_depth_instruction(extraction_depth: str) -> str:
+    """
+    Build depth-specific extraction instructions based on the requested level.
+    
+    Args:
+        extraction_depth: One of "capability", "process", "subprocess", "data_entity", "data_element"
+        
+    Returns:
+        Additional instructions string to append to the base extraction prompt
+    """
+    depth_map = {
+        "capability": {
+            "instruction": "DEPTH=CAPABILITY ONLY: Extract ONLY capability-level fields (id, name, description, vertical, subvertical). Set processes to empty []."
+        },
+        "process": {
+            "instruction": "DEPTH=PROCESS: Extract Capability and Processes. For each process include id, name, level, description, category. Set all subprocesses arrays to empty []."
+        },
+        "subprocess": {
+            "instruction": "DEPTH=SUBPROCESS: Extract Capability, Processes, and SubProcesses. For each subprocess include id, name, description, category. Set all data_entities arrays to empty []."
+        },
+        "data_entity": {
+            "instruction": "DEPTH=DATA_ENTITY: Extract Capability, Processes, SubProcesses, and DataEntities. For each data entity include id, name, description. Set all data_elements arrays to empty []."
+        },
+        "data_element": {
+            "instruction": "DEPTH=DATA_ELEMENT (MAXIMUM): Extract all levels completely: Capability -> Processes -> SubProcesses -> DataEntities -> DataElements."
+        }
+    }
+    
+    depth_config = depth_map.get(extraction_depth, depth_map["process"])
+    
+    return f"""
+
+⚠️ STRICT EXTRACTION DEPTH CONSTRAINT: {extraction_depth.upper()}
+{depth_config['instruction']}
+DO NOT EXTRACT DEEPER THAN THIS LEVEL. VIOLATING THIS CONSTRAINT WILL CAUSE IMPORT FAILURES.
+"""
 
 
 async def extract_capability_model(
     file_path: str,
-    output_dir: Optional[str] = None
+    output_dir: Optional[str] = None,
+    vertical: Optional[str] = None,
+    subvertical: Optional[str] = None,
+    extraction_depth: str = "process"
 ) -> AsyncGenerator[Dict, None]:
     """
     Extract capability model from a document using DeepAgent.
@@ -246,6 +282,9 @@ async def extract_capability_model(
     Args:
         file_path: Path to the document file (.pdf, .docx, .txt)
         output_dir: Directory to save extracted JSON (optional)
+        vertical: Manual vertical name override (optional, uses LLM value if not provided)
+        subvertical: Manual subvertical name override (optional, uses LLM value if not provided)
+        extraction_depth: Level to extract to - "capability", "process", "subprocess", "data_entity", "data_element"
         
     Yields:
         Dictionary events with status and data:
@@ -257,6 +296,9 @@ async def extract_capability_model(
     """
     
     try:
+        # Log received parameters for verification - use repr() to see True None vs "None" string
+        logger.info(f"[Extractor] Received parameters - file: {file_path}, vertical: {repr(vertical)}, subvertical: {repr(subvertical)}, extraction_depth: {repr(extraction_depth)}")
+        
         # Validate file exists
         if not os.path.exists(file_path):
             yield {
@@ -279,13 +321,11 @@ async def extract_capability_model(
         
         chunks = load_document(file_path)
         chunk_count = len(chunks)
-        
         yield {
             "status": "loading",
             "progress": 30,
             "message": f"Loaded {chunk_count} document chunks"
         }
-        
         # Step 2: Build the agent
         yield {
             "status": "extracting",
@@ -293,7 +333,18 @@ async def extract_capability_model(
             "message": "Initializing extraction agent..."
         }
         
-        agent = build_extraction_agent()
+        # Build extraction instructions based on depth and manual overrides
+        depth_instructions = _build_depth_instruction(extraction_depth)
+        agent_instructions = EXTRACTION_INSTRUCTIONS + depth_instructions
+        
+        # Create agent with modified instructions
+        llm = _get_azure_llm()
+        agent = create_deep_agent(
+            model=llm,
+            tools=[load_document, write_json],
+            system_prompt=agent_instructions,
+        )
+        
         output_dir = "Json_Documents"
         # Step 3: Create temp output path
         if output_dir is None:
@@ -301,18 +352,34 @@ async def extract_capability_model(
         
         output_path = os.path.join(output_dir, "extracted_capability_model.json")
         
-        # Step 4: Invoke the agent with explicit task
+        # Step 4: Invoke the agent with explicit task including vertical, subvertical, and depth
         yield {
             "status": "extracting",
             "progress": 50,
             "message": "Processing with LLM (this may take a moment)..."
         }
         
-        task = (
-            f"1) Call tool=load_document with path=`{file_path}` to ingest content.\n"
-            f"2) Analyze all chunks and construct the JSON capability model per OUTPUT CONTRACT.\n"
-            f"3) Call tool=write_json with path=`{output_path}` and the JSON object."
-        )
+        # Build task with user-provided configuration
+        task_parts = [
+            f"1) Call tool=load_document with path=`{file_path}` to ingest content.",
+            "2) Analyze all chunks and construct the JSON capability model per OUTPUT CONTRACT.",
+            "\nMANDATORY CONFIGURATION (MUST FOLLOW):",
+        ]
+        
+        # Always include configuration even if defaults
+        if vertical:
+            task_parts.append(f"- VERTICAL NAME: Set to '{vertical}' (user-provided, do not override)")
+        if subvertical:
+            task_parts.append(f"- SUBVERTICAL NAME: Set to '{subvertical}' (user-provided, do not override)")
+        
+        task_parts.append(f"- EXTRACTION DEPTH: {extraction_depth} (STRICT - do not extract beyond this level)")
+        task_parts.append(f"\n3) Call tool=write_json with path=`{output_path}` and the JSON object.")
+        
+        task = "\n".join(task_parts)
+        
+        # Log the complete task being sent to agent
+        logger.info(f"[Extractor] Task being sent to agent:\n{task}")
+        logger.info(f"[Extractor] Configuration summary - vertical: {repr(vertical)}, subvertical: {repr(subvertical)}, depth: {repr(extraction_depth)}")
         
         # Run in executor to avoid blocking
         def run_agent():
@@ -354,7 +421,13 @@ async def extract_capability_model(
             }
             return
         
-        # Step 6: Save the extracted data
+        # Step 6: Apply manual overrides if provided (overrides LLM values)
+        if vertical:
+            extracted_data["vertical"] = vertical
+        if subvertical:
+            extracted_data["subvertical"] = subvertical
+        
+        # Step 7: Save the extracted data
         final_path = write_json(output_path, extracted_data)
         
         yield {

@@ -2087,12 +2087,23 @@ class CapabilityImportRequest(BaseModel):
 
 
 @router.post("/upload/pdf")
-async def upload_and_extract_pdf(file: UploadFile = File(...)):
+async def upload_and_extract_pdf(
+    file: UploadFile = File(...),
+    vertical: Optional[str] = Query(None),
+    subvertical: Optional[str] = Query(None),
+    extraction_depth: str = Query("data_element")
+):
     """
     Upload a PDF/document and extract capability model using DeepAgent.
     
     Streams extraction progress back to the frontend in real-time.
     Each event is a JSON object on its own line (JSONL format).
+    
+    Args:
+        file: The uploaded document file
+        vertical: Optional manual vertical name to override LLM detection (query parameter)
+        subvertical: Optional manual subvertical name to override LLM detection (query parameter)
+        extraction_depth: Extraction depth level - capability|process|subprocess|data_entity|data_element (query parameter)
     
     Frontend should handle:
     - "started": Extraction beginning
@@ -2115,6 +2126,22 @@ async def upload_and_extract_pdf(file: UploadFile = File(...)):
             detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(allowed_extensions)}"
         )
     
+    # Normalize and clean parameters (strip whitespace, handle empty strings as None)
+    vertical = vertical.strip() if vertical and isinstance(vertical, str) else None
+    subvertical = subvertical.strip() if subvertical and isinstance(subvertical, str) else None
+    extraction_depth = extraction_depth.strip() if extraction_depth else "data_element"
+    
+    # Validate extraction depth
+    valid_depths = {"capability", "process", "subprocess", "data_entity", "data_element"}
+    if extraction_depth not in valid_depths:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid extraction_depth: '{extraction_depth}'. Allowed: {', '.join(sorted(valid_depths))}"
+        )
+    
+    # Log received parameters for debugging - show None vs actual values
+    logger.info(f"[API] Upload request - file: {file.filename}, vertical: {repr(vertical)}, subvertical: {repr(subvertical)}, depth: {repr(extraction_depth)}")
+    
     # Save uploaded file to temp location
     temp_dir = tempfile.gettempdir()
     temp_file_path = os.path.join(temp_dir, file.filename)
@@ -2125,12 +2152,19 @@ async def upload_and_extract_pdf(file: UploadFile = File(...)):
         with open(temp_file_path, "wb") as f:
             f.write(contents)
         
-        logger.info(f"Uploaded file saved to: {temp_file_path}")
+        logger.info(f"[API] Uploaded file saved to: {temp_file_path}")
+        logger.info(f"[API] Passing parameters to extractor - vertical: {repr(vertical)}, subvertical: {repr(subvertical)}, extraction_depth: {repr(extraction_depth)}")
         
         # Stream extraction progress
         async def generate_extraction_stream():
             """Generator that yields JSONL events from the extraction process"""
-            async for event in extract_capability_model(temp_file_path, temp_dir):
+            async for event in extract_capability_model(
+                temp_file_path, 
+                temp_dir,
+                vertical=vertical,
+                subvertical=subvertical,
+                extraction_depth=extraction_depth
+            ):
                 # Yield each event as a JSON line
                 yield json.dumps(event) + "\n"
         
@@ -2143,7 +2177,7 @@ async def upload_and_extract_pdf(file: UploadFile = File(...)):
         )
         
     except Exception as e:
-        logger.error(f"Upload failed: {type(e).__name__}: {e}", exc_info=True)
+        logger.error(f"[API] Upload failed: {type(e).__name__}: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Upload failed: {str(e)}"
